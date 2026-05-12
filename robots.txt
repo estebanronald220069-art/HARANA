@@ -1,0 +1,12 @@
+User-agent: *
+Disallow: /admin/
+Disallow: /includes/
+Disallow: /assets/
+Disallow: /user/includes/
+Disallow: /*.php$
+
+# Allow search engines to see these specific pages
+Allow: /index.php
+Allow: /register.php
+
+Sitemap: http://localhost/harana_financial_system/sitemap.xml
