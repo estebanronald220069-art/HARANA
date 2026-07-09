@@ -1,0 +1,29 @@
+# .htaccess for LOCAL DEVELOPMENT ONLY
+
+# Disable directory browsing
+Options -Indexes
+
+# Protect sensitive directories
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    
+    # Only block direct access to includes folders
+    RewriteRule ^includes/.*$ - [F,L]
+    RewriteRule ^admin/includes/.*$ - [F,L]
+    RewriteRule ^user/includes/.*$ - [F,L]
+    
+    # Don't block PHP files - let them run normally
+    # Remove any rules that block *.php
+</IfModule>
+
+# Prevent access to .htaccess itself
+<Files ".htaccess">
+    Order Allow,Deny
+    Deny from all
+</Files>
+
+# Prevent access to backup files
+<FilesMatch "\.(bak|old|sql|log)$">
+    Order Allow,Deny
+    Deny from all
+</FilesMatch>
