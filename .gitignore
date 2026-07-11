@@ -1,2 +1,20 @@
-uploads/
+# Sensitive files
+config/database.php
 includes/config.php
+.env
+*.conf
+
+# Uploads and cache
+var/uploads/
+var/cache/
+var/logs/
+
+# Composer
+vendor/
+composer.lock
+
+# System files
+.DS_Store
+Thumbs.db
+*.log
+*.tmp
