@@ -1,0 +1,20 @@
+{
+    "name": "harana/system",
+    "description": "Member Management System",
+    "type": "project",
+    "require": {
+        "php": ">=8.0"
+    },
+    "license": "MIT",
+    "authors": [
+        {
+            "name": "Ronald Esteban",
+            "email": "estebanronald220069@example.com"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Harana\\": "src/"
+        }
+    }
+}
