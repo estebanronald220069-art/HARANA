@@ -6,7 +6,7 @@ require_once 'includes/security.php';
 require_once 'includes/auth.php';
 
 // ===== UPDATED REDIRECT FOR ALREADY LOGGED IN USERS =====
-// If user is already logged in, redirect them to appropriate dashboard
+// If user is already logged in, redirect them to appropriate dashboard 
 if ($auth->isLoggedIn() || isset($_SESSION['user_id'])) {
     // If auth says not logged in but session has user_id, consider logged in
     $role = $_SESSION['role'] ?? null;
@@ -18,7 +18,7 @@ if ($auth->isLoggedIn() || isset($_SESSION['user_id'])) {
     }
     
     if ($role === 'admin') {
-        header('Location: admin/dashboard.php');
+        header('Location: ' . BASE_URL . '/admin/dashboard.php');
         exit();
     } else {
         header('Location: user/dashboard.php');

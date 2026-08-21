@@ -16,9 +16,9 @@ $member_id = isset($_POST['id']) ? (int)$_POST['id'] : 0;
 if (!empty($member_code)) {
     $member = $db->getSingle("SELECT * FROM members WHERE member_code = ?", [$member_code], 's');
 } 
-// Fallback to member_id (if your table has it)
+// Fallback to member_id (if your table has it) - FIXED: Use member_code not member_id
 elseif ($member_id > 0) {
-    $member = $db->getSingle("SELECT * FROM members WHERE member_id = ?", [$member_id], 'i');
+    $member = $db->getSingle("SELECT * FROM members WHERE member_code = ?", [$member_id], 's');
 } 
 else {
     http_response_code(400);

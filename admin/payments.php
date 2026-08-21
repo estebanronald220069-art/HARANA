@@ -4,7 +4,7 @@ require_once '../includes/config.php';
 require_once '../includes/db_connection.php';
 require_once '../includes/security.php';
 require_once '../includes/auth.php';
-require_once '../includes/user_functions.php'; // ADD THIS LINE
+require_once '../includes/user_functions.php';
 
 $auth->requireLogin();
 $current_user = $auth->getCurrentUser();
@@ -36,12 +36,13 @@ $params = [];
 $types = '';
 
 if (!empty($search)) {
-    $conditions[] = "(m.first_name LIKE ? OR m.last_name LIKE ? OR p.receipt_number LIKE ?)";
+    $conditions[] = "(m.first_name LIKE ? OR m.last_name LIKE ? OR p.receipt_number LIKE ? OR m.member_code LIKE ?)";
     $search_term = "%$search%";
     $params[] = $search_term;
     $params[] = $search_term;
     $params[] = $search_term;
-    $types .= 'sss';
+    $params[] = $search_term;
+    $types .= 'ssss';
 }
 if (!empty($status_filter)) {
     $conditions[] = "p.payment_status = ?";
@@ -72,7 +73,7 @@ $count_result = $db->getSingle($count_sql, $params, $types);
 $total_records = $count_result['total'] ?? 0;
 $total_pages = ceil($total_records / $limit);
 
-// Fetch payments
+// Fetch payments - FIXED: Using member_code for JOIN
 $sql = "SELECT p.*, 
                m.first_name, m.last_name, m.member_code,
                u.full_name as confirmed_by_name
@@ -86,7 +87,7 @@ $query_params = array_merge($params, [$limit, $offset]);
 $query_types = $types . 'ii';
 $payments = $db->getAll($sql, $query_params, $query_types);
 
-// Get members for dropdown
+// Get members for dropdown - FIXED: Using member_code
 $members = $db->getAll("SELECT member_code, first_name, last_name FROM members WHERE status = 'active' ORDER BY first_name");
 
 // Handle POST actions
@@ -109,28 +110,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (empty($member_code) || $amount <= 0) {
                 $error = 'Please select a member and enter a valid amount.';
             } else {
-                // Generate UUID and receipt number
-                $payment_uuid = sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
-                    mt_rand(0, 0xffff), mt_rand(0, 0xffff),
-                    mt_rand(0, 0xffff),
-                    mt_rand(0, 0x0fff) | 0x4000,
-                    mt_rand(0, 0x3fff) | 0x8000,
-                    mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
-                );
-                $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
-
-                $insert_sql = "INSERT INTO payments 
-                    (payment_uuid, member_id, payment_date, amount, due_date, payment_method, gcash_reference, payment_status, receipt_number, notes, ip_address)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)";
-                $insert_params = [$payment_uuid, $member_code, $payment_date, $amount, $due_date, $payment_method, $gcash_reference, $receipt_number, $notes, Security::getClientIP()];
-                $insert_types = 'ssdsssssss';
-
-                $result = $db->execute($insert_sql, $insert_params, $insert_types);
-                if ($result) {
-                    $message = 'Payment recorded successfully (pending confirmation).';
-                    Security::logEvent('PAYMENT_ADD', "Added payment for member $member_code, amount $amount");
+                // Verify member exists
+                $member_check = $db->getSingle("SELECT member_code FROM members WHERE member_code = ?", [$member_code], 's');
+                if (!$member_check) {
+                    $error = 'Selected member does not exist.';
                 } else {
-                    $error = 'Failed to record payment.';
+                    // Generate UUID and receipt number
+                    $payment_uuid = sprintf('%04x%04x-%04x-%04x-%04x-%04x%04x%04x',
+                        mt_rand(0, 0xffff), mt_rand(0, 0xffff),
+                        mt_rand(0, 0xffff),
+                        mt_rand(0, 0x0fff) | 0x4000,
+                        mt_rand(0, 0x3fff) | 0x8000,
+                        mt_rand(0, 0xffff), mt_rand(0, 0xffff), mt_rand(0, 0xffff)
+                    );
+                    $receipt_number = 'RCP-' . date('Ymd') . '-' . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
+
+                    $insert_sql = "INSERT INTO payments 
+                        (payment_uuid, member_id, payment_date, amount, due_date, payment_method, gcash_reference, payment_status, receipt_number, notes, ip_address)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)";
+                    $insert_params = [$payment_uuid, $member_code, $payment_date, $amount, $due_date, $payment_method, $gcash_reference, $receipt_number, $notes, Security::getClientIP()];
+                    $insert_types = 'ssdsssssss';
+
+                    $result = $db->execute($insert_sql, $insert_params, $insert_types);
+                    if ($result) {
+                        $message = 'Payment recorded successfully (pending confirmation).';
+                        Security::logEvent('PAYMENT_ADD', "Added payment for member $member_code, amount $amount");
+                    } else {
+                        $error = 'Failed to record payment.';
+                    }
                 }
             }
         } elseif ($action === 'edit') {
@@ -200,7 +207,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         $db->execute(
                             "INSERT INTO member_balances (member_code, total_paid, current_balance, last_payment_date) VALUES (?, ?, ?, ?)",
                             [$payment['member_id'], $payment['amount'], -$payment['amount'], $payment['payment_date']],
-                            'sddss'
+                            'sdds'
                         );
                     }
                     
@@ -432,35 +439,35 @@ $csrf_token = Security::generateCSRFToken();
         
         .filter-row { background: #f8f9fc; padding: 1rem; border-radius: 10px; margin-bottom: 1.5rem; }
         /* Fix for pending badge positioning */
-.list-group-item.position-relative {
-    position: relative !important;
-    overflow: visible !important;
-}
+        .list-group-item.position-relative {
+            position: relative !important;
+            overflow: visible !important;
+        }
 
-.badge-count {
-    position: absolute !important;
-    top: 50% !important;
-    right: 10px !important;
-    left: auto !important;
-    transform: translateY(-50%) !important;
-    font-size: 0.7rem !important;
-    padding: 3px 6px !important;
-    border-radius: 10px !important;
-    min-width: 20px !important;
-    text-align: center !important;
-    z-index: 100 !important;
-}
+        .badge-count {
+            position: absolute !important;
+            top: 50% !important;
+            right: 10px !important;
+            left: auto !important;
+            transform: translateY(-50%) !important;
+            font-size: 0.7rem !important;
+            padding: 3px 6px !important;
+            border-radius: 10px !important;
+            min-width: 20px !important;
+            text-align: center !important;
+            z-index: 100 !important;
+        }
 
-/* When sidebar is collapsed */
-#sidebar-wrapper.collapsed .badge-count {
-    display: none !important;
-}
+        /* When sidebar is collapsed */
+        #sidebar-wrapper.collapsed .badge-count {
+            display: none !important;
+        }
 
-/* For the pending page itself, keep the badge visible */
-#sidebar-wrapper .list-group-item.active .badge-count {
-    background-color: #dc3545 !important;
-    color: white !important;
-}
+        /* For the pending page itself, keep the badge visible */
+        #sidebar-wrapper .list-group-item.active .badge-count {
+            background-color: #dc3545 !important;
+            color: white !important;
+        }
     </style>
 </head>
 <body>

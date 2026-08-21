@@ -102,7 +102,7 @@ for ($i = 11; $i >= 0; $i--) {
     $member_growth[] = ['month' => $month_name, 'count' => $count];
 }
 
-// Chapter Performance
+// Chapter Performance - FIXED: Using member_code
 $chapter_performance = $db->getAll("
     SELECT 
         m.chapter,
@@ -117,7 +117,7 @@ $chapter_performance = $db->getAll("
     LIMIT 10
 ");
 
-// Top Payers (by total contributions)
+// Top Payers - FIXED: Using member_code
 $top_payers = $db->getAll("
     SELECT 
         m.member_code,
@@ -134,7 +134,7 @@ $top_payers = $db->getAll("
     LIMIT 10
 ");
 
-// Aging Report (Members with unpaid contributions)
+// Aging Report (Members with unpaid contributions) - FIXED: Using member_code
 $aging_report = $db->getAll("
     SELECT 
         m.member_code,

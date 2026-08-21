@@ -31,3 +31,17 @@ $arr = ["a"=>7, "b"=>2, "c"=>5, "d"=>4, "e"=>9];
 asort($arr);
 print_r($arr);
 ?>
+<!DOCTYPE html>
+<html>
+<body>
+
+<h1>My Web Page</h1>
+
+<p id="demo"></p>
+
+<script>
+document.getElementById("demo").innerHTML = "<h2>Hello World</h2>";
+</script>
+
+</body>
+</html> 

@@ -874,10 +874,7 @@ if ($action === 'add') {
                             $db->execute("DELETE FROM member_balances WHERE member_code = ?", [$member_code], 's');
                             
                             // Delete from payments
-                            $member_id = $db->getSingle("SELECT member_id FROM members WHERE member_code = ?", [$member_code], 's');
-                            if ($member_id) {
-                                $db->execute("DELETE FROM payments WHERE member_id = ?", [$member_id['member_id']], 'i');
-                            }
+                            $db->execute("DELETE FROM payments WHERE member_id = ?", [$member_code], 's');
                             
                             // Delete the member
                             $result = $db->execute("DELETE FROM members WHERE member_code = ?", [$member_code], 's');
@@ -943,11 +940,8 @@ if ($action === 'add') {
             // Delete from member_balances
             $db->execute("DELETE FROM member_balances WHERE member_code = ?", [$member_code], 's');
             
-            // Get member_id for payments deletion
-            $member_result = $db->getSingle("SELECT member_id FROM members WHERE member_code = ?", [$member_code], 's');
-            if ($member_result && isset($member_result['member_id'])) {
-                $db->execute("DELETE FROM payments WHERE member_id = ?", [$member_result['member_id']], 'i');
-            }
+            // Delete from payments
+            $db->execute("DELETE FROM payments WHERE member_id = ?", [$member_code], 's');
             
             // Delete the member
             $result = $db->execute("DELETE FROM members WHERE member_code = ?", [$member_code], 's');

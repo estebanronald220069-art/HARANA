@@ -1,7 +1,6 @@
 <?php
 // logout.php
 require_once 'includes/config.php';
-require_once 'includes/auth.php';
 
 // Clear all session variables
 $_SESSION = array();
@@ -18,7 +17,7 @@ if (ini_get("session.use_cookies")) {
 // Finally, destroy the session
 session_destroy();
 
-// Redirect to login page
-header("Location: index.php");
+// Redirect to login page using BASE_URL
+header("Location: " . BASE_URL . "/index.php");
 exit;
 ?>

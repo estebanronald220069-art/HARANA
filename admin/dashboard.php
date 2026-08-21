@@ -16,130 +16,70 @@ if ($current_user['role'] === 'admin') {
     $pending_count = $db->getSingle("SELECT COUNT(*) as cnt FROM pending_users WHERE status = 'pending'")['cnt'] ?? 0;
 }
 
-// ============ MEMBERS SUMMARY ============
-$members_summary = [];
+// ============ FIXED: MEMBERS LIST WITH PAYMENT STATUS ============
+$members_with_payment_status = [];
 
-// Total members
-$members_summary['total'] = $db->getSingle("SELECT COUNT(*) as total FROM members WHERE status = 'active'")['total'] ?? 0;
-$members_summary['inactive'] = $db->getSingle("SELECT COUNT(*) as total FROM members WHERE status = 'inactive'")['total'] ?? 0;
-$members_summary['deceased'] = $db->getSingle("SELECT COUNT(*) as total FROM members WHERE status = 'deceased'")['total'] ?? 0;
+// Get all active members with their latest payment status
+$members_with_payment_status = $db->getAll("
+    SELECT 
+        m.member_code,
+        m.first_name,
+        m.last_name,
+        m.email,
+        m.contact_number as phone,
+        m.status as member_status,
+        m.created_at,
+        m.monthly_contribution,
+        (
+            SELECT payment_status 
+            FROM payments 
+            WHERE member_id = m.member_code 
+            AND MONTH(payment_date) = MONTH(CURRENT_DATE())
+            AND YEAR(payment_date) = YEAR(CURRENT_DATE())
+            AND payment_status = 'confirmed'
+            ORDER BY payment_date DESC 
+            LIMIT 1
+        ) as current_payment_status,
+        (
+            SELECT COUNT(*) 
+            FROM payments 
+            WHERE member_id = m.member_code 
+            AND payment_status = 'confirmed'
+            AND payment_date > CURRENT_DATE()
+        ) as advanced_count,
+        (
+            SELECT COUNT(*) 
+            FROM payments 
+            WHERE member_id = m.member_code 
+            AND payment_status = 'pending'
+            AND MONTH(payment_date) = MONTH(CURRENT_DATE())
+            AND YEAR(payment_date) = YEAR(CURRENT_DATE())
+        ) as pending_count
+    FROM members m
+    WHERE m.status = 'active'
+    ORDER BY m.last_name ASC
+") ?? [];
 
-// New members this month
-$members_summary['new_this_month'] = $db->getSingle("
-    SELECT COUNT(*) as cnt 
-    FROM members 
-    WHERE MONTH(created_at) = MONTH(CURDATE()) 
-    AND YEAR(created_at) = YEAR(CURDATE())
-")['cnt'] ?? 0;
+// Categorize members
+$members_with_status = [
+    'paid' => [],
+    'unpaid' => [],
+    'advanced' => []
+];
 
-// ============ PAYMENTS OVERVIEW ============
-$monthly_target = 90000; // 90k target
-
-// Current month's collections
-$current_month_collected = $db->getSingle("
-    SELECT COALESCE(SUM(amount), 0) as total 
-    FROM payments 
-    WHERE payment_status = 'confirmed' 
-    AND MONTH(payment_date) = MONTH(CURRENT_DATE())
-    AND YEAR(payment_date) = YEAR(CURRENT_DATE())
-")['total'] ?? 0;
-
-// Current month's pending payments (pending status, not yet confirmed)
-$pending_payments = $db->getSingle("
-    SELECT COUNT(*) as cnt 
-    FROM payments 
-    WHERE payment_status = 'pending'
-    AND MONTH(payment_date) = MONTH(CURRENT_DATE())
-    AND YEAR(payment_date) = YEAR(CURRENT_DATE())
-")['cnt'] ?? 0;
-
-// Current month's paid payments (confirmed)
-$paid_payments = $db->getSingle("
-    SELECT COUNT(*) as cnt 
-    FROM payments 
-    WHERE payment_status = 'confirmed'
-    AND MONTH(payment_date) = MONTH(CURRENT_DATE())
-    AND YEAR(payment_date) = YEAR(CURRENT_DATE())
-")['cnt'] ?? 0;
-
-// Advanced payments - members who paid ahead (payment_date > current month)
-$advanced_payments = $db->getSingle("
-    SELECT COUNT(*) as cnt 
-    FROM payments 
-    WHERE payment_status = 'confirmed'
-    AND YEAR(payment_date) = YEAR(CURRENT_DATE())
-    AND MONTH(payment_date) > MONTH(CURRENT_DATE())
-")['cnt'] ?? 0;
-
-// Calculate progress percentage toward target
-$progress_percentage = $monthly_target > 0 ? min(100, ($current_month_collected / $monthly_target) * 100) : 0;
-
-// ============ MONTHLY REPORTS (LAST 3 MONTHS) ============
-$monthly_reports = [];
-
-for ($i = 0; $i < 3; $i++) {
-    $month = date('n', strtotime("-$i months"));
-    $year = date('Y', strtotime("-$i months"));
-    $month_name = date('M', strtotime("-$i months"));
-    
-    // Total collected for that month
-    $collected = $db->getSingle("
-        SELECT COALESCE(SUM(amount), 0) as total 
-        FROM payments 
-        WHERE payment_status = 'confirmed' 
-        AND MONTH(payment_date) = ? 
-        AND YEAR(payment_date) = ?
-    ", [$month, $year], 'ii')['total'] ?? 0;
-    
-    // Pending payments for that month
-    $pending = $db->getSingle("
-        SELECT COUNT(*) as cnt 
-        FROM payments 
-        WHERE payment_status = 'pending'
-        AND MONTH(payment_date) = ? 
-        AND YEAR(payment_date) = ?
-    ", [$month, $year], 'ii')['cnt'] ?? 0;
-    
-    // Paid payments for that month
-    $paid = $db->getSingle("
-        SELECT COUNT(*) as cnt 
-        FROM payments 
-        WHERE payment_status = 'confirmed'
-        AND MONTH(payment_date) = ? 
-        AND YEAR(payment_date) = ?
-    ", [$month, $year], 'ii')['cnt'] ?? 0;
-    
-    // Advanced payments for that month (payments made for future months)
-    $advanced = $db->getSingle("
-        SELECT COUNT(*) as cnt 
-        FROM payments 
-        WHERE payment_status = 'confirmed'
-        AND MONTH(payment_date) > ? 
-        AND YEAR(payment_date) >= ?
-    ", [$month, $year], 'ii')['cnt'] ?? 0;
-    
-    $monthly_reports[] = [
-        'month' => $month_name,
-        'year' => $year,
-        'collected' => $collected,
-        'pending' => $pending,
-        'paid' => $paid,
-        'advanced' => $advanced
-    ];
-}
-
-// ============ PENDING APPROVALS SUMMARY ============
-$pending_summary = [];
-
-if ($current_user['role'] === 'admin') {
-    $pending_summary['total'] = $pending_count;
-    
-    $pending_summary['users'] = $db->getAll("
-        SELECT id, username, first_name, last_name, email, requested_at 
-        FROM pending_users 
-        WHERE status = 'pending' 
-        ORDER BY requested_at DESC
-    ");
+foreach ($members_with_payment_status as $member) {
+    // Check if member has advanced payments (future months)
+    if ($member['advanced_count'] > 0) {
+        $members_with_status['advanced'][] = $member;
+    } 
+    // Check if member has paid current month
+    elseif ($member['current_payment_status'] === 'confirmed') {
+        $members_with_status['paid'][] = $member;
+    } 
+    // Otherwise, member is unpaid
+    else {
+        $members_with_status['unpaid'][] = $member;
+    }
 }
 
 $csrf_token = Security::generateCSRFToken();
@@ -172,7 +112,7 @@ $csrf_token = Security::generateCSRFToken();
             transition: all 0.3s ease;
         }
         
-        /* Sidebar - keeping your original colors */
+        /* Sidebar */
         #sidebar-wrapper {
             background: #375a7f;
             color: #fff;
@@ -182,9 +122,9 @@ $csrf_token = Security::generateCSRFToken();
             transition: width 0.3s ease;
             box-shadow: 4px 0 10px rgba(0,0,0,0.1);
             white-space: nowrap;
+            flex-shrink: 0;
         }
         
-        /* Sidebar - Collapsed state */
         #sidebar-wrapper.collapsed {
             width: 70px;
         }
@@ -314,9 +254,11 @@ $csrf_token = Security::generateCSRFToken();
             background: #f0f2f5;
             height: 100vh;
             overflow-y: auto;
-            padding: 0;
+            display: flex;
+            flex-direction: column;
         }
         
+        /* Navbar */
         .navbar {
             background: #fff !important;
             box-shadow: 0 2px 4px rgba(0,0,0,0.02);
@@ -324,6 +266,7 @@ $csrf_token = Security::generateCSRFToken();
             display: flex;
             align-items: center;
             justify-content: space-between;
+            flex-shrink: 0;
         }
         
         .navbar-left {
@@ -349,303 +292,164 @@ $csrf_token = Security::generateCSRFToken();
             gap: 20px;
         }
         
-        /* Dashboard Grid */
-        .dashboard-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 20px;
+        /* ===== CONTENT ===== */
+        .content-container {
             padding: 20px;
-            height: calc(100vh - 70px);
-        }
-        
-        /* Module Cards */
-        .module-card {
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-            display: flex;
-            flex-direction: column;
-            overflow: hidden;
-            transition: all 0.2s ease;
-        }
-        
-        .module-card:hover {
-            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        }
-        
-        .module-header {
-            padding: 1rem 1.2rem;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            border-bottom: 1px solid #e9ecef;
-        }
-        
-        .module-header i {
-            font-size: 1.2rem;
-            color: #375a7f;
-        }
-        
-        .module-header h5 {
-            margin: 0;
-            font-weight: 600;
-            font-size: 1rem;
-            color: #2c3e50;
-        }
-        
-        .module-body {
-            padding: 1.2rem;
             flex: 1;
+            overflow-y: auto;
         }
         
-        /* Progress Bar Styles */
-        .progress-container {
-            margin: 15px 0;
-        }
-        
-        .progress-label {
+        /* ===== MEMBERS LIST PANEL ===== */
+        .members-filter-tabs {
             display: flex;
-            justify-content: space-between;
-            font-size: 0.85rem;
-            margin-bottom: 8px;
-            color: #4a5568;
-        }
-        
-        .progress {
-            height: 10px;
-            border-radius: 10px;
-            background: #e9ecef;
-            overflow: hidden;
-        }
-        
-        .progress-bar-custom {
-            background: linear-gradient(90deg, #28a745, #20c997);
-            height: 100%;
-            border-radius: 10px;
-            transition: width 0.5s ease;
-        }
-        
-        /* Stats Row */
-        .stats-row {
-            display: flex;
-            justify-content: space-between;
-            gap: 15px;
-            margin-top: 20px;
-            padding-top: 15px;
-            border-top: 1px solid #e9ecef;
-        }
-        
-        .stat-box {
-            flex: 1;
-            text-align: center;
-            padding: 10px;
-            background: #f8f9fa;
-            border-radius: 12px;
-        }
-        
-        .stat-box .stat-number {
-            font-size: 1.3rem;
-            font-weight: 700;
-            color: #2c3e50;
-        }
-        
-        .stat-box .stat-label {
-            font-size: 0.7rem;
-            color: #6c757d;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            margin-top: 4px;
-        }
-        
-        /* Monthly Reports */
-        .reports-list {
-            display: flex;
-            flex-direction: column;
-            gap: 15px;
-        }
-        
-        .report-item {
-            background: #f8f9fa;
-            border-radius: 12px;
-            padding: 12px;
-            transition: all 0.2s;
-        }
-        
-        .report-item:hover {
-            background: #f0f2f5;
-        }
-        
-        .report-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 10px;
-            padding-bottom: 8px;
-            border-bottom: 1px solid #e9ecef;
-        }
-        
-        .report-month {
-            font-weight: 700;
-            color: #375a7f;
-            font-size: 0.9rem;
-        }
-        
-        .report-amount {
-            font-weight: 700;
-            color: #28a745;
-            font-size: 1rem;
-        }
-        
-        .report-stats {
-            display: flex;
-            justify-content: space-between;
-            gap: 10px;
-        }
-        
-        .report-stat {
-            flex: 1;
-            text-align: center;
-            padding: 8px;
-            background: white;
-            border-radius: 8px;
-        }
-        
-        .report-stat .stat-number {
-            font-size: 1rem;
-            font-weight: 700;
-            color: #2c3e50;
-        }
-        
-        .report-stat .stat-label {
-            font-size: 0.6rem;
-            color: #6c757d;
-            text-transform: uppercase;
-        }
-        
-        .report-stat.pending .stat-number { color: #f39c12; }
-        .report-stat.paid .stat-number { color: #28a745; }
-        .report-stat.advanced .stat-number { color: #3498db; }
-        
-        /* Members Overview Stats */
-        .member-stats {
-            display: flex;
-            justify-content: space-between;
-            gap: 15px;
+            gap: 0;
             margin-bottom: 20px;
-        }
-        
-        .member-stat {
-            flex: 1;
-            text-align: center;
-            padding: 15px;
-            background: #f8f9fa;
+            background: white;
             border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
         }
         
-        .member-stat .stat-number {
-            font-size: 1.5rem;
-            font-weight: 700;
-            color: #2c3e50;
-        }
-        
-        .member-stat .stat-label {
-            font-size: 0.7rem;
-            color: #6c757d;
-        }
-        
-        /* Quick Actions */
-        .quick-actions {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            margin-top: 15px;
-        }
-        
-        .quick-action-btn {
-            flex: 1;
-            padding: 8px 12px;
-            background: #f8f9fa;
-            border: 1px solid #e9ecef;
-            border-radius: 10px;
-            text-align: center;
-            text-decoration: none;
-            color: #2c3e50;
-            font-size: 0.8rem;
+        .members-filter-tabs .filter-tab {
+            padding: 12px 24px;
+            border: none;
+            background: none;
+            font-weight: 500;
+            font-size: 0.85rem;
+            cursor: pointer;
             transition: all 0.2s;
+            color: #6c757d;
+            flex: 1;
+            text-align: center;
+            border-bottom: 3px solid transparent;
         }
         
-        .quick-action-btn:hover {
+        .members-filter-tabs .filter-tab:hover {
+            background: #f8f9fa;
+        }
+        
+        .members-filter-tabs .filter-tab.active {
+            color: #375a7f;
+            border-bottom-color: #375a7f;
+            background: #f8f9fa;
+        }
+        
+        .members-filter-tabs .filter-tab .count-badge {
+            background: #e9ecef;
+            padding: 2px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+            margin-left: 6px;
+        }
+        
+        .members-filter-tabs .filter-tab.active .count-badge {
             background: #375a7f;
             color: white;
-            border-color: #375a7f;
         }
         
-        .quick-action-btn i {
-            margin-right: 6px;
+        .members-filter-tabs .filter-tab .count-badge.paid-badge { 
+            background: #d4edda; 
+            color: #155724; 
         }
         
-        /* Pending Items */
-        .pending-item {
-            display: flex;
-            align-items: center;
-            padding: 10px 12px;
-            background: #fff9f0;
-            border-left: 3px solid #f39c12;
-            border-radius: 10px;
-            margin-bottom: 10px;
+        .members-filter-tabs .filter-tab .count-badge.unpaid-badge { 
+            background: #f8d7da; 
+            color: #721c24; 
         }
         
-        .pending-info {
-            flex: 1;
+        .members-filter-tabs .filter-tab .count-badge.advanced-badge { 
+            background: #d1ecf1; 
+            color: #0c5460; 
         }
         
-        .pending-name {
+        .member-list-container {
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+            overflow: hidden;
+        }
+        
+        .member-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        
+        .member-table th {
+            background: #f8f9fa;
+            padding: 12px 16px;
+            text-align: left;
+            font-size: 0.75rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #6c757d;
             font-weight: 600;
-            color: #8a6d3b;
+            border-bottom: 2px solid #e9ecef;
+        }
+        
+        .member-table td {
+            padding: 12px 16px;
+            border-bottom: 1px solid #e9ecef;
             font-size: 0.85rem;
+            color: #2c3e50;
         }
         
-        .pending-meta {
-            font-size: 0.7rem;
-            color: #8a6d3b;
+        .member-table tr:hover td {
+            background: #f8f9fa;
         }
         
-        .badge-count {
-            position: absolute !important;
-            top: 50% !important;
-            right: 10px !important;
-            transform: translateY(-50%) !important;
-            font-size: 0.7rem !important;
-            padding: 3px 6px !important;
-            border-radius: 10px !important;
-        }
-        
-        .pending-badge {
-            background: rgba(220,53,69,0.2);
-            color: #b71c1c;
-            padding: 3px 10px;
+        .status-badge {
+            padding: 4px 12px;
             border-radius: 20px;
             font-size: 0.7rem;
-            margin-left: 8px;
+            font-weight: 600;
+            display: inline-block;
         }
         
-        @media (max-width: 992px) {
-            .dashboard-grid {
-                grid-template-columns: 1fr;
-            }
+        .status-badge.paid {
+            background: #d4edda;
+            color: #155724;
         }
         
+        .status-badge.unpaid {
+            background: #f8d7da;
+            color: #721c24;
+        }
+        
+        .status-badge.advanced {
+            background: #d1ecf1;
+            color: #0c5460;
+        }
+        
+        .status-badge.inactive {
+            background: #e2e3e5;
+            color: #383d41;
+        }
+        
+        .empty-state {
+            text-align: center;
+            padding: 40px 20px;
+            color: #6c757d;
+        }
+        
+        .empty-state i {
+            font-size: 3rem;
+            color: #dee2e6;
+            margin-bottom: 15px;
+        }
+        
+        /* Responsive */
         @media (max-width: 768px) {
-            .stats-row {
+            .members-filter-tabs {
                 flex-direction: column;
             }
             
-            .member-stats {
-                flex-direction: column;
+            .member-table {
+                font-size: 0.8rem;
             }
             
-            .report-stats {
-                flex-direction: column;
+            .member-table th,
+            .member-table td {
+                padding: 8px 10px;
             }
         }
     </style>
@@ -683,10 +487,11 @@ $csrf_token = Security::generateCSRFToken();
 
         <!-- Main Content -->
         <div id="page-content-wrapper">
+            <!-- Navbar -->
             <nav class="navbar navbar-light bg-light">
                 <div class="navbar-left">
                     <img src="../assets/images/harana-logo.png" alt="Harana" class="header-logo" id="headerLogo" onerror="this.style.display='none';">
-                    <span class="navbar-brand"><i class="fas fa-tachometer-alt me-2"></i>Dashboard</span>
+                    <span class="navbar-brand"><i class="fas fa-users me-2"></i>Members</span>
                 </div>
                 <div class="navbar-right">
                     <span class="text-muted small">
@@ -696,152 +501,98 @@ $csrf_token = Security::generateCSRFToken();
                 </div>
             </nav>
 
-            <div class="dashboard-grid">
-                <!-- MEMBERS MODULE - Top Left -->
-                <div class="module-card">
-                    <div class="module-header">
-                        <i class="fas fa-users"></i>
-                        <h5>Members Overview</h5>
-                    </div>
-                    <div class="module-body">
-                        <div class="member-stats">
-                            <div class="member-stat">
-                                <div class="stat-number"><?php echo $members_summary['total']; ?></div>
-                                <div class="stat-label">Active</div>
-                                <div class="small text-success">+<?php echo $members_summary['new_this_month']; ?> new</div>
-                            </div>
-                            <div class="member-stat">
-                                <div class="stat-number"><?php echo $members_summary['inactive']; ?></div>
-                                <div class="stat-label">Inactive</div>
-                            </div>
-                            <div class="member-stat">
-                                <div class="stat-number"><?php echo $members_summary['deceased']; ?></div>
-                                <div class="stat-label">Deceased</div>
-                            </div>
-                        </div>
-                        
-                        <div class="quick-actions">
-                            <a href="members.php" class="quick-action-btn"><i class="fas fa-list"></i>All Members</a>
-                            <a href="members.php?action=add" class="quick-action-btn"><i class="fas fa-plus"></i>Add Member</a>
-                        </div>
-                    </div>
+            <!-- CONTENT -->
+            <div class="content-container">
+                
+                <!-- Filter Tabs -->
+                <div class="members-filter-tabs">
+                    <button class="filter-tab active" data-filter="all">
+                        All Members
+                        <span class="count-badge"><?php echo count($members_with_payment_status); ?></span>
+                    </button>
+                    <button class="filter-tab" data-filter="paid">
+                        <i class="fas fa-check-circle" style="color: #28a745;"></i> Paid
+                        <span class="count-badge paid-badge"><?php echo count($members_with_status['paid']); ?></span>
+                    </button>
+                    <button class="filter-tab" data-filter="unpaid">
+                        <i class="fas fa-exclamation-circle" style="color: #dc3545;"></i> Unpaid
+                        <span class="count-badge unpaid-badge"><?php echo count($members_with_status['unpaid']); ?></span>
+                    </button>
+                    <button class="filter-tab" data-filter="advanced">
+                        <i class="fas fa-star" style="color: #17a2b8;"></i> Advanced
+                        <span class="count-badge advanced-badge"><?php echo count($members_with_status['advanced']); ?></span>
+                    </button>
                 </div>
 
-                <!-- PAYMENTS OVERVIEW MODULE - Top Right -->
-                <div class="module-card">
-                    <div class="module-header">
-                        <i class="fas fa-credit-card"></i>
-                        <h5>Payments Overview</h5>
-                    </div>
-                    <div class="module-body">
-                        <div class="progress-container">
-                            <div class="progress-label">
-                                <span>This Month</span>
-                                <span>₱<?php echo number_format($current_month_collected); ?> / ₱<?php echo number_format($monthly_target); ?></span>
-                            </div>
-                            <div class="progress">
-                                <div class="progress-bar-custom" style="width: <?php echo $progress_percentage; ?>%"></div>
-                            </div>
-                        </div>
-                        
-                        <div class="stats-row">
-                            <div class="stat-box">
-                                <div class="stat-number"><?php echo $pending_payments; ?></div>
-                                <div class="stat-label">Pending</div>
-                            </div>
-                            <div class="stat-box">
-                                <div class="stat-number"><?php echo $paid_payments; ?></div>
-                                <div class="stat-label">Paid</div>
-                            </div>
-                            <div class="stat-box">
-                                <div class="stat-number"><?php echo $advanced_payments; ?></div>
-                                <div class="stat-label">Advanced</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- REPORTS MODULE - Bottom Left -->
-                <div class="module-card">
-                    <div class="module-header">
-                        <i class="fas fa-chart-bar"></i>
-                        <h5>Monthly Reports</h5>
-                    </div>
-                    <div class="module-body">
-                        <div class="reports-list">
-                            <?php foreach ($monthly_reports as $report): ?>
-                            <div class="report-item">
-                                <div class="report-header">
-                                    <span class="report-month"><?php echo $report['month']; ?> / / <?php echo $report['year']; ?></span>
-                                    <span class="report-amount">₱<?php echo number_format($report['collected']); ?></span>
-                                </div>
-                                <div class="report-stats">
-                                    <div class="report-stat pending">
-                                        <div class="stat-number"><?php echo $report['pending']; ?></div>
-                                        <div class="stat-label">Pending</div>
-                                    </div>
-                                    <div class="report-stat paid">
-                                        <div class="stat-number"><?php echo $report['paid']; ?></div>
-                                        <div class="stat-label">Paid</div>
-                                    </div>
-                                    <div class="report-stat advanced">
-                                        <div class="stat-number"><?php echo $report['advanced']; ?></div>
-                                        <div class="stat-label">Advanced</div>
-                                    </div>
-                                </div>
-                            </div>
-                            <?php endforeach; ?>
-                        </div>
-                        
-                        <div class="quick-actions mt-3">
-                            <a href="reports.php" class="quick-action-btn"><i class="fas fa-chart-bar"></i>View All Reports</a>
-                        </div>
+                <!-- Member List -->
+                <div class="member-list-container">
+                    <div class="table-responsive">
+                        <table class="member-table">
+                            <thead>
+                                <tr>
+                                    <th>Member Code</th>
+                                    <th>Member</th>
+                                    <th>Email</th>
+                                    <th>Phone</th>
+                                    <th>Status</th>
+                                    <th>Payment Status</th>
+                                </tr>
+                            </thead>
+                            <tbody id="memberTableBody">
+                                <?php if (count($members_with_payment_status) > 0): ?>
+                                    <?php foreach ($members_with_payment_status as $member): ?>
+                                        <?php 
+                                            $status_class = 'unpaid';
+                                            $status_text = 'Unpaid';
+                                            if ($member['advanced_count'] > 0) {
+                                                $status_class = 'advanced';
+                                                $status_text = 'Advanced';
+                                            } elseif ($member['current_payment_status'] === 'confirmed') {
+                                                $status_class = 'paid';
+                                                $status_text = 'Paid';
+                                            }
+                                        ?>
+                                        <tr class="member-row" data-status="<?php echo $status_class; ?>">
+                                            <td>
+                                                <span class="badge bg-secondary"><?php echo htmlspecialchars($member['member_code']); ?></span>
+                                            </td>
+                                            <td>
+                                                <strong><?php echo htmlspecialchars($member['first_name'] . ' ' . $member['last_name']); ?></strong>
+                                            </td>
+                                            <td><?php echo htmlspecialchars($member['email']); ?></td>
+                                            <td><?php echo htmlspecialchars($member['phone']); ?></td>
+                                            <td>
+                                                <span class="status-badge <?php echo $member['member_status'] === 'active' ? 'paid' : 'inactive'; ?>">
+                                                    <?php echo ucfirst($member['member_status']); ?>
+                                                </span>
+                                            </td>
+                                            <td>
+                                                <span class="status-badge <?php echo $status_class; ?>">
+                                                    <?php echo $status_text; ?>
+                                                    <?php if ($status_class === 'advanced'): ?>
+                                                        <small>(<?php echo $member['advanced_count']; ?> months)</small>
+                                                    <?php endif; ?>
+                                                    <?php if ($member['pending_count'] > 0 && $status_class === 'unpaid'): ?>
+                                                        <small>(<?php echo $member['pending_count']; ?> pending)</small>
+                                                    <?php endif; ?>
+                                                </span>
+                                            </td>
+                                        </tr>
+                                    <?php endforeach; ?>
+                                <?php else: ?>
+                                    <tr>
+                                        <td colspan="6">
+                                            <div class="empty-state">
+                                                <i class="fas fa-users"></i>
+                                                <p>No active members found</p>
+                                            </div>
+                                        </td>
+                                    </tr>
+                                <?php endif; ?>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
-
-                <!-- PENDING APPROVALS MODULE - Bottom Right -->
-                <?php if ($current_user['role'] === 'admin'): ?>
-                <div class="module-card">
-                    <div class="module-header">
-                        <i class="fas fa-user-clock"></i>
-                        <h5>Pending Approvals</h5>
-                        <?php if ($pending_summary['total'] > 0): ?>
-                            <span class="pending-badge"><?php echo $pending_summary['total']; ?> pending</span>
-                        <?php endif; ?>
-                    </div>
-                    <div class="module-body">
-                        <?php if (count($pending_summary['users']) > 0): ?>
-                            <?php foreach (array_slice($pending_summary['users'], 0, 3) as $pending): ?>
-                            <div class="pending-item">
-                                <div class="pending-info">
-                                    <div class="pending-name"><?php echo htmlspecialchars($pending['first_name'] . ' ' . $pending['last_name']); ?></div>
-                                    <div class="pending-meta">
-                                        <i class="fas fa-envelope"></i> <?php echo htmlspecialchars($pending['email']); ?>
-                                        <span class="ms-2"><i class="fas fa-clock"></i> <?php echo date('M d', strtotime($pending['requested_at'])); ?></span>
-                                    </div>
-                                </div>
-                                <a href="pending_users.php" class="btn btn-sm" style="background: #fee9e7; color: #b71c1c; padding: 4px 10px; border-radius: 20px; font-size: 0.7rem; text-decoration: none;">Review</a>
-                            </div>
-                            <?php endforeach; ?>
-                            
-                            <?php if ($pending_summary['total'] > 3): ?>
-                            <div class="text-center mt-2">
-                                <small class="text-muted">+ <?php echo ($pending_summary['total'] - 3); ?> more pending approvals</small>
-                            </div>
-                            <?php endif; ?>
-                            
-                            <div class="quick-actions mt-2">
-                                <a href="pending_users.php" class="quick-action-btn" style="background: #fee9e7; color: #b71c1c;">Review All (<?php echo $pending_summary['total']; ?>)</a>
-                            </div>
-                        <?php else: ?>
-                            <div class="text-center py-4">
-                                <i class="fas fa-check-circle" style="color: #2ecc71; font-size: 2rem;"></i>
-                                <p class="mt-2 small text-muted">All clear! No pending approvals</p>
-                            </div>
-                        <?php endif; ?>
-                    </div>
-                </div>
-                <?php endif; ?>
             </div>
         </div>
     </div>
@@ -880,6 +631,34 @@ $csrf_token = Security::generateCSRFToken();
                 this.style.display = 'none';
             };
         }
+
+        // ===== MEMBERS FILTER FUNCTIONALITY =====
+        const filterTabs = document.querySelectorAll('.filter-tab');
+        const memberRows = document.querySelectorAll('.member-row');
+
+        filterTabs.forEach(filterTab => {
+            filterTab.addEventListener('click', function() {
+                // Update active filter tab
+                filterTabs.forEach(ft => ft.classList.remove('active'));
+                this.classList.add('active');
+                
+                const filter = this.dataset.filter;
+                
+                // Show/hide member rows based on filter
+                memberRows.forEach(row => {
+                    if (filter === 'all') {
+                        row.style.display = '';
+                    } else {
+                        const rowStatus = row.dataset.status;
+                        if (rowStatus === filter) {
+                            row.style.display = '';
+                        } else {
+                            row.style.display = 'none';
+                        }
+                    }
+                });
+            });
+        });
     </script>
 </body>
 </html>

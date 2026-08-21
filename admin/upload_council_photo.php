@@ -42,7 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 // Move uploaded file
                 if (move_uploaded_file($file['tmp_name'], $filepath)) {
-                    // Get old photo to delete later
+                    // Get old photo to delete later - FIXED: Using council_id correctly
                     $old_photo = $db->getSingle("SELECT photo FROM council WHERE council_id = ?", [$council_id], 'i');
                     
                     // Update database with new photo path (store relative path)

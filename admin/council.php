@@ -58,7 +58,8 @@ if ($active_tab === 'active') {
     $council_members = $db->getAll("
         SELECT DISTINCT c.*, 
                (SELECT COUNT(*) FROM council_edit_history WHERE council_id = c.council_id AND is_reverted = 0) as edit_count,
-               (SELECT MAX(edited_at) FROM council_edit_history WHERE council_id = c.council_id AND is_reverted = 0) as last_edited_at
+               (SELECT MAX(edited_at) FROM council_edit_history WHERE council_id = c.council_id AND is_reverted = 0) as last_edited_at,
+               (SELECT history_id FROM council_edit_history WHERE council_id = c.council_id AND is_reverted = 0 ORDER BY edited_at DESC LIMIT 1) as latest_history_id
         FROM council c
         WHERE EXISTS (SELECT 1 FROM council_edit_history WHERE council_id = c.council_id AND is_reverted = 0)
         AND c.is_deleted = 0
@@ -150,28 +151,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
                 $result = $db->execute($update_sql, $update_params, $update_types);
                 if ($result !== false) {
-                    // Track changes in history
-                    $changes = [];
-                    if ($old_data['last_name'] != $last_name) $changes[] = "Last Name: {$old_data['last_name']} → {$last_name}";
-                    if ($old_data['first_name'] != $first_name) $changes[] = "First Name: {$old_data['first_name']} → {$first_name}";
-                    if ($old_data['middle_name'] != $middle_name) $changes[] = "Middle Name: {$old_data['middle_name']} → {$middle_name}";
-                    if ($old_data['position'] != $position) $changes[] = "Position: {$old_data['position']} → {$position}";
-                    if ($old_data['contact_number'] != $contact_number) $changes[] = "Contact: {$old_data['contact_number']} → {$contact_number}";
-                    if ($old_data['email'] != $email) $changes[] = "Email: {$old_data['email']} → {$email}";
-                    if ($old_data['term_start'] != $term_start) $changes[] = "Term Start: {$old_data['term_start']} → {$term_start}";
-                    if ($old_data['term_end'] != $term_end) $changes[] = "Term End: {$old_data['term_end']} → {$term_end}";
-                    
-                    foreach ($changes as $change) {
+                    // Build a human-readable summary (for logging) and a full
+                    // before/after snapshot (so Undo has real data to restore).
+                    $fields_to_track = [
+                        'last_name' => 'Last Name', 'first_name' => 'First Name',
+                        'middle_name' => 'Middle Name', 'position' => 'Position',
+                        'contact_number' => 'Contact', 'email' => 'Email',
+                        'term_start' => 'Term Start', 'term_end' => 'Term End',
+                        'status' => 'Status'
+                    ];
+                    $new_values = [
+                        'last_name' => $last_name, 'first_name' => $first_name,
+                        'middle_name' => $middle_name, 'full_name' => $full_name,
+                        'position' => $position, 'contact_number' => $contact_number,
+                        'email' => $email, 'term_start' => $term_start,
+                        'term_end' => $term_end, 'status' => $status
+                    ];
+
+                    $changed = false;
+                    $summary = [];
+                    foreach ($fields_to_track as $field => $label) {
+                        if ((string)$old_data[$field] !== (string)$new_values[$field]) {
+                            $changed = true;
+                            $summary[] = "$label: {$old_data[$field]} → {$new_values[$field]}";
+                        }
+                    }
+
+                    if ($changed) {
+                        // old_value/new_value store full JSON snapshots so Undo can
+                        // actually restore every field, not just log a description.
+                        $old_snapshot = json_encode([
+                            'last_name' => $old_data['last_name'], 'first_name' => $old_data['first_name'],
+                            'middle_name' => $old_data['middle_name'], 'full_name' => $old_data['full_name'],
+                            'position' => $old_data['position'], 'contact_number' => $old_data['contact_number'],
+                            'email' => $old_data['email'], 'term_start' => $old_data['term_start'],
+                            'term_end' => $old_data['term_end'], 'status' => $old_data['status']
+                        ]);
+                        $new_snapshot = json_encode($new_values);
+
                         $db->execute(
                             "INSERT INTO council_edit_history (council_id, field_name, old_value, new_value, edited_by, edited_by_name) 
                              VALUES (?, ?, ?, ?, ?, ?)",
-                            [$council_id, 'multiple', $old_data['full_name'], $change, $current_user['user_id'], $current_user['full_name']],
+                            [$council_id, 'profile_update', $old_snapshot, $new_snapshot, $current_user['user_id'], $current_user['full_name']],
                             'isssis'
                         );
+                        Security::logEvent('COUNCIL_EDIT', "Edited council member ID: $council_id (" . implode('; ', $summary) . ")");
+                    } else {
+                        Security::logEvent('COUNCIL_EDIT', "Edited council member ID: $council_id (no field changes)");
                     }
-                    
-                    Security::logEvent('COUNCIL_EDIT', "Edited council member ID: $council_id");
-                    header('Location: council.php?tab=edited&success=updated');
+                    // Send the admin to the tab matching the member's new status,
+                    // so reactivating (or deactivating) someone is visibly confirmed
+                    // instead of dropping them on the Edited tab where they may not appear.
+                    $redirect_tab = ($status === 'inactive') ? 'inactive' : 'active';
+                    header('Location: council.php?tab=' . $redirect_tab . '&success=updated');
                     exit();
                 } else {
                     $error = 'Failed to update council member.';
@@ -251,20 +283,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             );
             
             if ($history) {
-                // Parse the change
-                $change = $history['new_value'];
-                $parts = explode(': ', $change);
-                $field = $parts[0];
-                $values = explode(' → ', $parts[1] ?? '');
-                
-                // Mark as reverted
-                $db->execute("UPDATE council_edit_history SET is_reverted = 1 WHERE history_id = ?", [$history_id], 'i');
-                
-                Security::logEvent('COUNCIL_UNDO_EDIT', "Undid edit for council member ID: $council_id");
-                header('Location: council.php?tab=edited&success=undo_edit');
-                exit();
+                $old_snapshot = json_decode($history['old_value'], true);
+
+                if (is_array($old_snapshot)) {
+                    // Restore every tracked field back to its pre-edit value.
+                    $restore_sql = "UPDATE council SET last_name=?, first_name=?, middle_name=?, full_name=?, position=?, contact_number=?, email=?, term_start=?, term_end=?, status=?, updated_by=? WHERE council_id=? AND is_deleted=0";
+                    $restore_params = [
+                        $old_snapshot['last_name'] ?? '', $old_snapshot['first_name'] ?? '',
+                        $old_snapshot['middle_name'] ?? '', $old_snapshot['full_name'] ?? '',
+                        $old_snapshot['position'] ?? '', $old_snapshot['contact_number'] ?? '',
+                        $old_snapshot['email'] ?? '', $old_snapshot['term_start'] ?? null,
+                        $old_snapshot['term_end'] ?? null, $old_snapshot['status'] ?? 'active',
+                        $current_user['user_id'], $council_id
+                    ];
+                    $restore_types = 'ssssssssssii';
+
+                    $restore_result = $db->execute($restore_sql, $restore_params, $restore_types);
+
+                    if ($restore_result !== false) {
+                        // Mark as reverted so it can't be undone twice
+                        $db->execute("UPDATE council_edit_history SET is_reverted = 1 WHERE history_id = ?", [$history_id], 'i');
+
+                        Security::logEvent('COUNCIL_UNDO_EDIT', "Undid edit for council member ID: $council_id");
+                        $redirect_tab = (($old_snapshot['status'] ?? 'active') === 'inactive') ? 'inactive' : 'active';
+                        header('Location: council.php?tab=' . $redirect_tab . '&success=undo_edit');
+                        exit();
+                    } else {
+                        $error = 'Failed to restore previous values.';
+                    }
+                } else {
+                    // Older history rows saved before this fix don't have a
+                    // restorable snapshot - nothing safe to undo automatically.
+                    $error = 'This edit is too old to be undone automatically.';
+                }
+            } else {
+                $error = 'Failed to undo edit. That edit may have already been undone.';
             }
-            $error = 'Failed to undo edit.';
         }
     }
 }
@@ -1171,9 +1225,11 @@ $csrf_token = Security::generateCSRFToken();
                                         </button>
                                         <?php endif; ?>
                                         <?php if ($active_tab === 'edited'): ?>
-                                        <button class="action-btn action-btn-undo" onclick="showUndoEditModal(<?php echo $c['council_id']; ?>, '<?php echo addslashes($c['full_name']); ?>')">
+                                        <?php if (!empty($c['latest_history_id'])): ?>
+                                        <button class="action-btn action-btn-undo" onclick="showUndoEditModal(<?php echo $c['council_id']; ?>, <?php echo $c['latest_history_id']; ?>, '<?php echo addslashes($c['full_name']); ?>')">
                                             <i class="fas fa-undo-alt"></i> Undo
                                         </button>
+                                        <?php endif; ?>
                                         <?php endif; ?>
                                     </div>
                                 </div>
@@ -1556,6 +1612,7 @@ $csrf_token = Security::generateCSRFToken();
             $('#viewLoading').show();
             $('#viewContent').hide();
             $('#viewEditBtn').hide();
+            $('#viewCouncilModal').modal('show');
             
             $.ajax({
                 url: 'get_council_member.php',
@@ -1674,8 +1731,9 @@ $csrf_token = Security::generateCSRFToken();
         }
 
         // Undo edit modal
-        function showUndoEditModal(councilId, name) {
+        function showUndoEditModal(councilId, historyId, name) {
             $('#undo_council_id').val(councilId);
+            $('#undo_history_id').val(historyId);
             $('#undo_council_name').text(name);
             $('#undoEditModal').modal('show');
         }

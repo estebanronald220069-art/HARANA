@@ -53,6 +53,14 @@ $payment_summary = $db->getSingle(
     [$member_code], 's'
 );
 
+// Get pending payments count
+$pending_count = $db->getSingle(
+    "SELECT COUNT(*) as count FROM payments p
+     JOIN members m ON p.member_id = m.member_code
+     WHERE m.member_code = ? AND p.payment_status = 'pending'",
+    [$member_code], 's'
+)['count'] ?? 0;
+
 // Get payment methods breakdown
 $payment_methods = $db->getAll(
     "SELECT p.payment_method, COUNT(*) as count, SUM(p.amount) as total
@@ -71,17 +79,25 @@ $expected_total = $months_as_member * $monthly_contribution;
 $total_paid = $balance['total_paid'] ?? 0;
 $current_balance = $expected_total - $total_paid;
 
+// Check if user has pending payments
+$has_pending = $pending_count > 0;
+
 $csrf_token = Security::generateCSRFToken();
+
+// Handle success/error messages from payment page
+$success_message = isset($_GET['success']) ? $_GET['success'] : '';
+$error_message = isset($_GET['error']) ? $_GET['error'] : '';
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Payment History - <?php echo APP_NAME; ?></title>
+    <title>Smart Pay - <?php echo APP_NAME; ?></title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
     <style>
+        /* ===== STYLES (same as before with additions) ===== */
         :root {
             --primary-color: #375a7f;
             --secondary-color: #2c4a6b;
@@ -89,6 +105,7 @@ $csrf_token = Security::generateCSRFToken();
             --warning-color: #ffc107;
             --danger-color: #dc3545;
             --info-color: #17a2b8;
+            --gcash-color: #00b4d8;
         }
 
         * {
@@ -301,10 +318,53 @@ $csrf_token = Security::generateCSRFToken();
             margin: 0 auto;
         }
 
+        /* GCash Payment Button */
+        .gcash-payment-btn {
+            background: linear-gradient(135deg, #00b4d8, #0077b6);
+            color: white;
+            border: none;
+            padding: 15px 35px;
+            border-radius: 12px;
+            font-size: 1.1rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(0, 180, 216, 0.3);
+            display: inline-flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .gcash-payment-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 25px rgba(0, 180, 216, 0.5);
+            color: white;
+        }
+
+        .gcash-payment-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .gcash-payment-btn i {
+            font-size: 1.5rem;
+        }
+
+        .pending-badge {
+            background: #fff3cd;
+            color: #856404;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            display: inline-block;
+            margin-left: 10px;
+        }
+
         /* Summary Cards */
         .summary-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
             gap: 20px;
             margin-bottom: 25px;
         }
@@ -622,6 +682,25 @@ $csrf_token = Security::generateCSRFToken();
             font-size: 0.7rem;
         }
 
+        /* Alert Messages */
+        .alert-custom {
+            border-radius: 12px;
+            padding: 15px 20px;
+            margin-bottom: 20px;
+            animation: slideDown 0.3s ease;
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
         /* Responsive */
         @media (max-width: 768px) {
             .summary-grid {
@@ -641,8 +720,12 @@ $csrf_token = Security::generateCSRFToken();
             .table-custom td {
                 padding: 8px 10px;
             }
+
+            .gcash-payment-btn {
+                width: 100%;
+                justify-content: center;
+            }
         }
-        
     </style>
 </head>
 <body>
@@ -676,12 +759,47 @@ $csrf_token = Security::generateCSRFToken();
             ?>
 
             <div class="payments-container">
-                  <!-- Add this in the header area or wherever you want the payment button -->
-<div class="mb-4">
-    <a href="gcash_payment.php" class="btn btn-success">
-        <i class="fab fa-gcash me-2"></i> Pay with GCash
-    </a>
-     <br><br>
+                <!-- Alert Messages -->
+                <?php if ($success_message == 'payment_submitted'): ?>
+                    <div class="alert alert-success alert-custom">
+                        <i class="fas fa-check-circle me-2"></i>
+                        <strong>Payment submitted!</strong> Your payment is pending confirmation. You will receive a notification once confirmed.
+                    </div>
+                <?php endif; ?>
+                
+                <?php if ($error_message == 'payment_failed'): ?>
+                    <div class="alert alert-danger alert-custom">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        <strong>Payment failed!</strong> There was an error processing your payment. Please try again.
+                    </div>
+                <?php endif; ?>
+
+                <!-- GCash Pay Button -->
+                <div class="mb-4">
+                    <a href="gcash_payment.php" class="gcash-payment-btn" <?php echo $has_pending ? 'disabled' : ''; ?>>
+    <i class="fab fa-gcash"></i>
+    <?php if ($has_pending): ?>
+        <span>You have a pending payment</span>
+        <span class="pending-badge">Pending</span>
+    <?php else: ?>
+        <span>Pay with GCash</span>
+        <i class="fas fa-arrow-right"></i>
+    <?php endif; ?>
+</a>
+                    <?php if ($has_pending): ?>
+                        <small class="text-muted d-block mt-2">
+                            <i class="fas fa-info-circle me-1"></i>
+                            Please wait for your pending payment to be confirmed before making another payment.
+                        </small>
+                    <?php else: ?>
+                        <small class="text-muted d-block mt-2">
+                            <i class="fas fa-info-circle me-1"></i>
+                            Pay your monthly contributions securely using GCash. 
+                            <a href="#" data-bs-toggle="modal" data-bs-target="#gcashGuideModal">How it works?</a>
+                        </small>
+                    <?php endif; ?>
+                </div>
+
                 <!-- Summary Cards -->
                 <div class="summary-grid">
                     <div class="summary-card">
@@ -780,11 +898,10 @@ $csrf_token = Security::generateCSRFToken();
                                 </div>
                                 <h5>No Payment History</h5>
                                 <p class="text-muted">You haven't made any payments yet.</p>
-                                <a href="../admin/payments.php?action=add&member_id=<?php echo $member_id; ?>" class="btn btn-primary" style="background: #375a7f; border: none;">
-                                    <i class="fas fa-credit-card me-2"></i>Make Your First Payment
+                                <a href="gcash_payment.php" class="btn btn-primary" style="background: #375a7f; border: none;">
+                                    <i class="fab fa-gcash me-2"></i>Pay with GCash
                                 </a>
                             </div>
-                           
                         <?php else: ?>
                             <table class="table-custom">
                                 <thead>
@@ -876,6 +993,67 @@ $csrf_token = Security::generateCSRFToken();
                         Showing <?php echo count($payments); ?> of <?php echo $total_payments; ?> payments
                     </div>
                     <?php endif; ?>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- GCash Guide Modal -->
+    <div class="modal fade" id="gcashGuideModal" tabindex="-1" aria-labelledby="gcashGuideModalLabel" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+                <div class="modal-header" style="background: linear-gradient(135deg, #00b4d8, #0077b6); color: white;">
+                    <h5 class="modal-title" id="gcashGuideModalLabel">
+                        <i class="fab fa-gcash me-2"></i>How to Pay with GCash
+                    </h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <h6 class="fw-bold">Step-by-Step Guide</h6>
+                            <ol class="list-group list-group-numbered mb-3">
+                                <li class="list-group-item border-0 ps-0">
+                                    <strong>Step 1:</strong> Click the <span class="badge" style="background: #00b4d8;">Pay with GCash</span> button
+                                </li>
+                                <li class="list-group-item border-0 ps-0">
+                                    <strong>Step 2:</strong> Enter the amount you want to pay
+                                </li>
+                                <li class="list-group-item border-0 ps-0">
+                                    <strong>Step 3:</strong> Scan the QR code using your GCash app
+                                </li>
+                                <li class="list-group-item border-0 ps-0">
+                                    <strong>Step 4:</strong> Confirm the payment in your GCash app
+                                </li>
+                                <li class="list-group-item border-0 ps-0">
+                                    <strong>Step 5:</strong> Wait for admin confirmation (within 24 hours)
+                                </li>
+                            </ol>
+                            
+                            <div class="alert alert-info">
+                                <i class="fas fa-info-circle me-2"></i>
+                                <strong>Note:</strong> Please ensure you have enough balance in your GCash account before proceeding.
+                            </div>
+                        </div>
+                        <div class="col-md-6 text-center">
+                            <h6 class="fw-bold">Scan QR Code to Pay</h6>
+                            <div class="bg-white p-3 rounded shadow-sm" style="display: inline-block;">
+                                <img src="../assets/images/gcash-qr.jpg" alt="GCash QR Code" 
+                                     style="max-width: 250px; width: 100%;" 
+                                     onerror="this.style.display='none'; this.parentNode.innerHTML='<div class=\'text-center py-4\'><i class=\'fas fa-qrcode fa-5x text-secondary\'></i><p class=\'mt-2 text-muted\'>QR Code Image Not Found</p></div>'">
+                            </div>
+                            <p class="text-muted mt-2">
+                                <i class="fas fa-mobile-alt me-1"></i>
+                                Open GCash app → Pay QR → Scan this code
+                            </p>
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <a href="gcash_payment.php" class="btn" style="background: linear-gradient(135deg, #00b4d8, #0077b6); color: white;">
+                        <i class="fab fa-gcash me-2"></i>Pay Now
+                    </a>
                 </div>
             </div>
         </div>

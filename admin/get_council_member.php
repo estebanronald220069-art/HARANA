@@ -21,11 +21,7 @@ $id = (int)$_GET['id'];
 $member = $db->getSingle("SELECT * FROM council WHERE council_id = ?", [$id], 'i');
 
 if ($member) {
-    // Make sure the data structure matches what the frontend expects
-    // The frontend code expects last_name, first_name, etc.
-    // Since your database uses full_name, we need to split it or adapt
-    
-    // For now, let's just return the data as is
+    // Return the data as is - already using council_id which is correct
     echo json_encode(['success' => true, 'data' => $member]);
 } else {
     echo json_encode(['success' => false, 'error' => 'Member not found']);

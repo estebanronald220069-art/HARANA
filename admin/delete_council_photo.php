@@ -17,7 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     } else {
         $council_id = (int)$_POST['council_id'];
         
-        // Get current photo path
+        // Get current photo path - FIXED: Using council_id correctly
         $member = $db->getSingle("SELECT photo FROM council WHERE council_id = ?", [$council_id], 'i');
         
         if ($member && $member['photo']) {

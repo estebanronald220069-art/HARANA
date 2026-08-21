@@ -20,7 +20,6 @@ function getUserProfilePhoto($db, $user_id) {
     
     return null;
 }
-// includes/user_functions.php
 
 /**
  * Get member data for current user
@@ -156,8 +155,7 @@ function getUserRecentPayments($db, $member_code, $limit = 5) {
     
     return $db->getAll(
         "SELECT p.* FROM payments p
-         JOIN members m ON p.member_id = m.member_code
-         WHERE m.member_code = ? AND p.payment_status = 'confirmed' 
+         WHERE p.member_id = ? AND p.payment_status = 'confirmed' 
          ORDER BY p.payment_date DESC 
          LIMIT ?",
         [$member_code, $limit],
@@ -176,8 +174,7 @@ function getUserPayments($db, $member_code, $limit, $offset) {
     
     return $db->getAll(
         "SELECT p.* FROM payments p
-         JOIN members m ON p.member_id = m.member_code
-         WHERE m.member_code = ? 
+         WHERE p.member_id = ? 
          ORDER BY p.payment_date DESC 
          LIMIT ? OFFSET ?",
         [$member_code, $limit, $offset],
@@ -196,8 +193,7 @@ function getUserPaymentCount($db, $member_code) {
     
     $result = $db->getSingle(
         "SELECT COUNT(*) as total FROM payments p
-         JOIN members m ON p.member_id = m.member_code
-         WHERE m.member_code = ?",
+         WHERE p.member_id = ?",
         [$member_code],
         's'
     );
