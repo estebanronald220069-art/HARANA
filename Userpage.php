@@ -7,6 +7,11 @@ require_once 'includes/auth.php';
 
 // Require login for this page
 $auth->requireLogin();
+
+// Legacy page — use the modern dashboard instead
+header('Location: user/dashboard.php');
+exit();
+
 $current_user = $auth->getCurrentUser();
 
 $db = Database::getInstance();

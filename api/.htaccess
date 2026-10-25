@@ -1,0 +1,14 @@
+RewriteEngine On
+RewriteBase /harana_financial_system/api/
+
+# Don't rewrite real files
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# Route /api/auth/login → /api/auth/login.php
+RewriteRule ^auth/login$      auth/login.php      [L,QSA]
+RewriteRule ^auth/logout$     auth/logout.php     [L,QSA]
+RewriteRule ^leader/members$  leader/members.php  [L,QSA]
+RewriteRule ^leader/batches$  leader/batches.php  [L,QSA]
+RewriteRule ^leader/batch/([^/]+)$ leader/batch_detail.php?id=$1 [L,QSA]

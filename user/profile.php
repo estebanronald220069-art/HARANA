@@ -1,5 +1,5 @@
 <?php
-// user/profile.php - Complete Redesigned Version
+// user/profile.php — Phone-first form layout with emoji nav (2026-10)
 require_once '../includes/config.php';
 require_once '../includes/db_connection.php';
 require_once '../includes/security.php';
@@ -21,33 +21,31 @@ $member_code = $member['member_code'];
 $message = '';
 $error = '';
 
-// Get pending photo request status
+// Pending photo request
 $pending_photo = $db->getSingle(
-    "SELECT * FROM member_photo_requests 
-     WHERE member_code = ? AND status = 'pending' 
+    "SELECT * FROM member_photo_requests
+     WHERE member_code = ? AND status = 'pending'
      ORDER BY requested_at DESC LIMIT 1",
     [$member_code], 's'
 );
 
-// Get current profile photo
-$current_photo = $member['profile_photo'] ?? null;
-$has_pending_photo = $pending_photo ? true : false;
-$pending_photo_path = $pending_photo ? '../' . $pending_photo['photo_path'] : null;
+$current_photo       = $member['profile_photo'] ?? null;
+$has_pending_photo   = $pending_photo ? true : false;
+$pending_photo_path  = $pending_photo ? '../' . $pending_photo['photo_path'] : null;
 
-// Handle profile update
+// ---- Handle profile update ----
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_profile'])) {
     if (!Security::validateCSRFToken($_POST['csrf_token'] ?? '')) {
         $error = 'Invalid security token';
     } else {
-        $contact_number = Security::sanitize($_POST['contact_number'] ?? '');
-        $alternate_number = Security::sanitize($_POST['alternate_number'] ?? '');
-        $email = Security::sanitize($_POST['email'] ?? '');
-        $present_address = Security::sanitize($_POST['present_address'] ?? '');
+        $contact_number    = Security::sanitize($_POST['contact_number'] ?? '');
+        $alternate_number  = Security::sanitize($_POST['alternate_number'] ?? '');
+        $email             = Security::sanitize($_POST['email'] ?? '');
+        $present_address   = Security::sanitize($_POST['present_address'] ?? '');
         $permanent_address = Security::sanitize($_POST['permanent_address'] ?? '');
-        
-        // Update using member_code
+
         $result = $db->execute(
-            "UPDATE members SET 
+            "UPDATE members SET
                 contact_number = ?,
                 alternate_number = ?,
                 email = ?,
@@ -58,13 +56,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_profile'])) {
             [$contact_number, $alternate_number, $email, $present_address, $permanent_address, $member_code],
             'ssssss'
         );
-        
+
         if ($result !== false) {
             $message = 'Profile updated successfully!';
-            // Refresh member data
             $member = getUserMemberData($db, $current_user);
-            
-            // Add audit log
             Security::logEvent('PROFILE_UPDATE', "Member $member_code updated contact information");
         } else {
             $error = 'Failed to update profile. Please try again.';
@@ -72,983 +67,1143 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_profile'])) {
     }
 }
 
-// Get city data for display (from config)
-$cities_data = [
-    'Occidental Mindoro' => ['San Jose', 'Mamburao', 'Sablayan', 'Calintaan', 'Rizal', 'Abra de Ilog', 'Paluan', 'Santa Cruz'],
-    'Nueva Ecija' => ['Palayan City', 'Cabanatuan', 'Gapan', 'San Jose', 'Science City of Muñoz', 'Guimba', 'Talavera', 'San Leonardo', 'Santa Rosa', 'General Tinio'],
-    'Pampanga' => ['San Fernando', 'Angeles City', 'Mabalacat', 'Mexico', 'Arayat', 'Candaba', 'Lubao', 'Porac', 'Floridablanca', 'Guagua'],
-    'Bulacan' => ['Malolos', 'Meycauayan', 'San Jose del Monte', 'Baliuag', 'Marilao', 'Bocaue', 'Santa Maria', 'Pulilan', 'Plaridel', 'Norzagaray'],
-    'Tarlac' => ['Tarlac City', 'Concepcion', 'Capas', 'Paniqui', 'Gerona', 'Camiling', 'Moncada', 'Victoria', 'San Jose', 'La Paz']
-];
-
 $csrf_token = Security::generateCSRFToken();
-?>
 
+// Display helpers
+$first_name = $member['first_name'] ?? 'Member';
+$last_name  = $member['last_name']  ?? '';
+$full_name  = trim($first_name . ' ' . $last_name);
+$initials   = strtoupper(substr($first_name,0,1) . substr($last_name,0,1));
+
+$photo_to_show = null;
+if ($has_pending_photo && $pending_photo_path) {
+    $photo_to_show = $pending_photo_path;
+} elseif ($current_photo) {
+    $photo_to_show = '../' . $current_photo;
+}
+
+$status       = $member['status'] ?? 'active';
+$status_class = $status === 'active' ? 'chip-ok' : ($status === 'deceased' ? 'chip-dim' : 'chip-warn');
+
+function pv($v) {
+    return ($v === null || $v === '') ? '—' : htmlspecialchars((string)$v);
+}
+
+$is_admin = ($current_user['role'] === 'admin');
+?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>My Profile - <?php echo APP_NAME; ?></title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        :root {
-            --primary-color: #375a7f;
-            --secondary-color: #2c4a6b;
-            --success-color: #28a745;
-            --warning-color: #ffc107;
-            --danger-color: #dc3545;
-            --info-color: #17a2b8;
-        }
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=2.0, user-scalable=yes">
+<title>My Profile — <?php echo defined('APP_NAME') ? APP_NAME : 'NHGL'; ?></title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   TOKENS
+============================================================ */
+:root{
+    --brand-900:#1e3a5a;--brand-800:#162d47;--brand-700:#234c76;--brand-600:#2d5f92;
+    --brand-500:#3d7ab8;--brand-100:#e8f0f8;--brand-50:#f4f8fc;
+    --yellow-accent:#fbbf24;--yellow-dark:#b45309;--yellow-100:#fef3c7;
+    --success-700:#14532d;--success-500:#16a34a;--success-100:#dcfce7;
+    --danger-700:#7f1d1d;--danger-500:#dc2626;--danger-100:#fee2e2;
+    --warning-700:#78350f;--warning-500:#d97706;--warning-100:#fef3c7;
+    --ink-900:#1e2b3c;--ink-700:#334155;--ink-500:#64748b;--ink-400:#94a3b8;--ink-300:#cbd5e1;
+    --line:#e2e8f0;--line-soft:#eef2f7;--paper:#f4f7fc;--surface:#ffffff;
+    --radius-sm:10px;--radius:14px;--radius-lg:18px;
+    --shadow-sm:0 2px 8px rgba(16,24,40,0.07);
+    --shadow-md:0 4px 14px rgba(16,24,40,0.08);
+    --shadow-lg:0 10px 26px rgba(16,24,40,0.10);
+}
+*{box-sizing:border-box}
+html{font-size:18px}
+body{
+    background:var(--paper);
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-size:1rem;line-height:1.6;color:var(--ink-900);
+    margin:0;padding:0;min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+}
 
-        * {
-            box-sizing: border-box;
-        }
+/* ============================================================
+   APP HEADER
+============================================================ */
+.app-header{
+    background:var(--surface);
+    border-bottom:1px solid var(--line);
+    padding:0.85rem 1rem;
+    display:flex;align-items:center;justify-content:space-between;
+    gap:12px;position:sticky;top:0;z-index:50;
+    box-shadow:var(--shadow-sm);
+}
+.app-brand{display:flex;align-items:center;gap:10px;min-width:0}
+.app-brand .logo-wrap{
+    width:44px;height:44px;border-radius:10px;
+    background:var(--brand-900);color:#fff;
+    display:flex;align-items:center;justify-content:center;
+    font-weight:900;font-size:1rem;flex-shrink:0;
+    overflow:hidden;
+}
+.app-brand .logo-wrap img{
+    width:100%;height:100%;object-fit:contain;
+    background:#fff;padding:4px;
+}
+.app-brand .brand-text{display:flex;flex-direction:column;line-height:1.15;min-width:0}
+.app-brand .brand-name{font-weight:800;font-size:1rem;color:var(--ink-900)}
+.app-brand .brand-sub{font-size:0.7rem;color:var(--ink-500);font-weight:500;line-height:1.2}
+.header-actions{display:flex;gap:8px;flex-shrink:0}
+.icon-btn{
+    width:44px;height:44px;border-radius:10px;
+    background:var(--paper);border:1px solid var(--line);
+    color:var(--ink-700);display:inline-flex;
+    align-items:center;justify-content:center;
+    cursor:pointer;transition:all 0.15s;text-decoration:none;
+}
+.icon-btn:hover{background:var(--brand-50);border-color:var(--brand-500);color:var(--brand-700)}
+.icon-btn svg{width:20px;height:20px}
 
-        body {
-            background: #f4f7fc;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            overflow: hidden;
-            margin: 0;
-            padding: 0;
-        }
+/* ============================================================
+   MAIN
+============================================================ */
+.main{max-width:640px;margin:0 auto;padding:1rem 0.9rem 6rem}
 
-        #wrapper {
-            display: flex;
-            width: 100%;
-            height: 100vh;
-            overflow: hidden;
-        }
+/* Alerts */
+.alert{
+    border-radius:var(--radius);padding:0.85rem 1rem;
+    margin-bottom:0.9rem;font-weight:600;
+    display:flex;align-items:flex-start;gap:10px;font-size:0.9rem;
+    line-height:1.5;
+}
+.alert.alert-success{background:var(--success-100);border:2px solid #86efac;color:var(--success-700)}
+.alert.alert-danger{background:var(--danger-100);border:2px solid #fca5a5;color:var(--danger-700)}
+.alert svg{width:20px;height:20px;flex-shrink:0;margin-top:1px}
 
-        /* Sidebar Styles */
-        #sidebar-wrapper {
-            background: #375a7f;
-            color: #fff;
-            width: 250px;
-            height: 100vh;
-            overflow-y: auto;
-            transition: width 0.3s ease;
-            box-shadow: 4px 0 10px rgba(0,0,0,0.1);
-            white-space: nowrap;
-        }
+/* ============================================================
+   ID CARD
+============================================================ */
+.id-card{
+    background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--radius-lg);overflow:hidden;
+    box-shadow:var(--shadow-sm);margin-bottom:0.9rem;
+}
+.id-card-top{
+    background:linear-gradient(135deg,var(--brand-800) 0%,var(--brand-600) 100%);
+    color:#fff;padding:1.25rem 1.1rem;
+    display:flex;align-items:center;gap:1rem;flex-wrap:wrap;
+    position:relative;overflow:hidden;
+}
+.id-card-top::before{
+    content:'';position:absolute;top:-60px;right:-60px;
+    width:180px;height:180px;
+    background:radial-gradient(circle,rgba(251,191,36,0.18) 0%,transparent 70%);
+    border-radius:50%;pointer-events:none;
+}
+.id-photo{
+    width:80px;height:80px;border-radius:var(--radius);
+    overflow:hidden;background:rgba(255,255,255,0.15);
+    border:2.5px solid rgba(255,255,255,0.35);
+    display:flex;align-items:center;justify-content:center;
+    flex-shrink:0;position:relative;z-index:2;
+}
+.id-photo img{width:100%;height:100%;object-fit:cover}
+.id-photo .initials{
+    font-size:1.75rem;font-weight:900;letter-spacing:0.02em;
+    color:rgba(255,255,255,0.95);
+}
+.id-info{flex:1;min-width:0;position:relative;z-index:2}
+.id-info .member-code{
+    font-family:'Courier New',monospace;font-size:0.72rem;
+    color:rgba(255,255,255,0.9);font-weight:700;
+    background:rgba(255,255,255,0.15);
+    padding:2px 8px;border-radius:4px;
+    display:inline-block;margin-bottom:6px;
+    letter-spacing:0.03em;
+}
+.id-info h2{
+    font-size:1.2rem;font-weight:900;line-height:1.15;
+    margin:0 0 6px;letter-spacing:-0.01em;
+    word-break:break-word;
+}
+.id-info .chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{
+    display:inline-flex;align-items:center;gap:4px;
+    padding:3px 10px;border-radius:100px;
+    font-size:0.7rem;font-weight:700;line-height:1.3;
+}
+.chip-ok{background:rgba(220,252,231,0.9);color:var(--success-700)}
+.chip-warn{background:rgba(254,243,199,0.9);color:var(--warning-700)}
+.chip-dim{background:rgba(226,232,240,0.9);color:var(--ink-500)}
 
-        #sidebar-wrapper.collapsed { width: 70px; }
-        #sidebar-wrapper.collapsed .sidebar-heading span { display: none; }
-        #sidebar-wrapper.collapsed .list-group-item span { display: none; }
-        #sidebar-wrapper.collapsed .list-group-item i {
-            margin-right: 0;
-            width: 100%;
-            text-align: center;
-            font-size: 1.2rem;
-        }
-        #sidebar-wrapper.collapsed .list-group-item { padding: 15px 0; text-align: center; }
-        #sidebar-wrapper.collapsed .badge { display: none; }
-        #sidebar-wrapper.collapsed .sidebar-heading img { display: none; }
+/* Photo action row */
+.photo-actions{
+    padding:0.85rem 1.1rem;
+    display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+    border-bottom:1px solid var(--line-soft);
+}
+.photo-btn{
+    display:inline-flex;align-items:center;gap:8px;
+    padding:9px 14px;border-radius:var(--radius-sm);
+    background:var(--brand-100);color:var(--brand-700);
+    font-weight:700;font-size:0.85rem;border:none;
+    cursor:pointer;font-family:inherit;transition:background 0.15s;
+    min-height:44px;
+}
+.photo-btn:hover{background:var(--brand-50)}
+.photo-btn svg{width:16px;height:16px}
+.photo-status{
+    display:inline-flex;align-items:center;gap:6px;
+    padding:5px 12px;border-radius:100px;
+    font-size:0.75rem;font-weight:700;
+}
+.photo-status.pending{background:var(--warning-100);color:var(--warning-700)}
+.photo-status.approved{background:var(--success-100);color:var(--success-700)}
 
-        #sidebar-wrapper .sidebar-heading {
-            padding: 1.2rem 1rem;
-            font-size: 1.4rem;
-            font-weight: 600;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            background: #375a7f;
-            color: white;
-            text-align: left;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
+/* Org block */
+.org-block{
+    background:var(--brand-50);padding:0.9rem 1.1rem;
+    border-top:1px solid var(--line-soft);
+}
+.org-block h3{
+    font-size:0.65rem;text-transform:uppercase;letter-spacing:0.08em;
+    font-weight:800;color:var(--brand-600);margin:0 0 5px;
+}
+.org-block .org-name{
+    font-size:0.85rem;font-weight:800;color:var(--ink-900);
+    line-height:1.35;margin:0 0 3px;
+}
+.org-block .org-line{
+    font-size:0.75rem;color:var(--ink-500);
+    margin:2px 0;line-height:1.45;
+}
 
-        #sidebar-wrapper.collapsed .sidebar-heading { justify-content: center; padding: 1.2rem 0; }
-        #sidebar-wrapper .sidebar-heading img { height: 30px; width: auto; margin-right: 10px; }
-        .menu-toggle { background: transparent; border: none; font-size: 1.5rem; color: white; cursor: pointer; padding: 0 10px; }
-        .header-logo { height: 30px; width: auto; margin-right: 10px; display: none; }
-        #sidebar-wrapper.collapsed ~ #page-content-wrapper .header-logo { display: inline-block; }
+/* ============================================================
+   SECTION
+============================================================ */
+.section{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:var(--radius-lg);
+    overflow:hidden;
+    box-shadow:var(--shadow-sm);
+    margin-bottom:0.9rem;
+}
 
-        #sidebar-wrapper .list-group-item {
-            background: transparent;
-            border: none;
-            color: rgba(255,255,255,0.9);
-            padding: 0.8rem 1.2rem;
-            font-weight: 500;
-            transition: all 0.2s;
-            font-size: 0.95rem;
-            text-align: left;
-        }
+.section-head{
+    background:var(--brand-900);
+    color:#fff;
+    padding:0.85rem 1.1rem;
+    display:flex;align-items:center;gap:10px;
+    border-bottom:3px solid var(--yellow-accent);
+}
+.section-head .num-badge{
+    width:26px;height:26px;border-radius:6px;
+    background:var(--yellow-accent);color:var(--brand-900);
+    display:inline-flex;align-items:center;justify-content:center;
+    font-size:0.72rem;font-weight:900;flex-shrink:0;
+    letter-spacing:0.02em;
+}
+.section-head h2{
+    font-size:0.88rem;font-weight:800;margin:0;
+    letter-spacing:0.04em;text-transform:uppercase;
+    color:#fff;
+}
 
-        #sidebar-wrapper .list-group-item:hover,
-        #sidebar-wrapper .list-group-item.active {
-            background: rgba(255,255,255,0.15);
-            color: #fff;
-            border-left: 4px solid #fff;
-        }
+.section-body{padding:1rem 1.1rem 1.15rem}
+.fields{display:flex;flex-direction:column;gap:1rem}
 
-        #sidebar-wrapper .list-group-item i { width: 24px; margin-right: 10px; }
+.field-group{
+    display:flex;flex-direction:column;gap:0.75rem;
+    padding-bottom:0.85rem;
+    border-bottom:1px dashed var(--line);
+}
+.field-group:last-child{border-bottom:none;padding-bottom:0}
+.field-group-label{
+    font-size:0.7rem;text-transform:uppercase;letter-spacing:0.08em;
+    font-weight:800;color:var(--brand-600);
+    padding-bottom:0.3rem;
+}
 
-        #page-content-wrapper {
-            flex: 1;
-            background: #f4f7fc;
-            height: 100vh;
-            overflow-y: auto;
-            padding: 0;
-        }
+.field{display:flex;flex-direction:column;gap:4px;min-width:0}
+.field .lbl{
+    font-size:0.72rem;text-transform:uppercase;letter-spacing:0.05em;
+    font-weight:800;color:var(--ink-500);
+    line-height:1.3;
+}
+.field .val{
+    font-size:0.95rem;font-weight:600;color:var(--ink-900);
+    background:var(--paper);padding:0.65rem 0.85rem;
+    border-radius:var(--radius-sm);
+    border:1px solid transparent;
+    word-break:break-word;line-height:1.45;
+    min-height:46px;display:flex;align-items:center;
+}
+.field .val.empty{
+    color:var(--ink-400);font-style:italic;font-weight:500;
+}
 
-        /* Navbar */
-        .navbar {
-            background: #fff !important;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            padding: 0.7rem 1.2rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
+.field input.val,
+.field input[type="email"].val,
+.field input[type="text"].val{
+    background:var(--surface);border:1px solid var(--line);
+    font-family:inherit;font-size:1rem;width:100%;outline:none;
+    transition:all 0.15s;color:var(--ink-900);
+}
+.field input.val:focus{
+    border-color:var(--brand-500);
+    box-shadow:0 0 0 3px rgba(61,122,184,0.15);
+    background:#fff;
+}
+.field input.val::placeholder{
+    color:var(--ink-400);font-weight:400;
+}
 
-        .navbar-left { display: flex; align-items: center; }
-        .navbar-brand { font-size: 1.2rem; font-weight: 500; color: #375a7f !important; }
-        .navbar-brand i { color: #375a7f; }
-        .navbar-right { display: flex; align-items: center; gap: 20px; }
+.field-row{
+    display:grid;
+    grid-template-columns:repeat(auto-fit,minmax(0,1fr));
+    gap:0.6rem;
+}
 
-        /* Profile Container */
-        .profile-container {
-            padding: 20px;
-            max-width: 1200px;
-            margin: 0 auto;
-        }
+.field .val .chip{
+    font-size:0.72rem;padding:3px 10px;
+}
 
-        /* Logo and Photo Section */
-        .profile-header-section {
-            background: white;
-            border-radius: 12px;
-            margin-bottom: 20px;
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        }
+.empty-block{
+    padding:1.1rem;
+    background:var(--paper);border-radius:var(--radius-sm);
+    text-align:center;color:var(--ink-400);
+    font-style:italic;font-size:0.88rem;
+}
 
-        .logo-section {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 20px;
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-        }
+/* ============================================================
+   ACTION BUTTONS
+============================================================ */
+.actions{
+    display:flex;flex-direction:column;gap:10px;
+    margin:1rem 0 0;
+}
+.btn-primary{
+    background:var(--yellow-accent);color:var(--brand-900);
+    border:none;padding:1rem 1.25rem;
+    border-radius:var(--radius);font-size:1.02rem;font-weight:800;
+    font-family:inherit;cursor:pointer;transition:all 0.18s;
+    display:inline-flex;align-items:center;justify-content:center;gap:10px;
+    box-shadow:0 4px 14px rgba(251,191,36,0.35);
+    min-height:56px;letter-spacing:0.01em;
+}
+.btn-primary:hover{transform:translateY(-2px);box-shadow:0 8px 20px rgba(251,191,36,0.5)}
+.btn-primary:active{transform:translateY(0)}
+.btn-secondary{
+    background:transparent;color:var(--brand-600);
+    border:1.5px solid var(--line);padding:1rem 1.25rem;
+    border-radius:var(--radius);font-size:0.98rem;font-weight:700;
+    font-family:inherit;cursor:pointer;transition:all 0.15s;
+    display:inline-flex;align-items:center;justify-content:center;gap:10px;
+    min-height:56px;text-decoration:none;
+}
+.btn-secondary:hover{background:var(--brand-50);border-color:var(--brand-600)}
+.btn-primary svg,.btn-secondary svg{width:18px;height:18px}
 
-        .logo-left {
-            display: flex;
-            align-items: center;
-            gap: 20px;
-        }
+/* Upload progress */
+.upload-progress{
+    display:none;margin-top:8px;width:100%;max-width:160px;
+}
+.upload-progress.show{display:block}
+.upload-progress .bar-track{
+    height:6px;background:var(--line-soft);border-radius:100px;overflow:hidden;
+}
+.upload-progress .bar-fill{
+    height:100%;background:var(--brand-600);border-radius:100px;
+    width:0%;transition:width 0.2s;
+}
 
-        .logo-left img {
-            width: 80px;
-            height: 80px;
-            object-fit: contain;
-        }
+/* ============================================================
+   SIDEBAR DRAWER (Menu)
+============================================================ */
+.drawer-overlay {
+    position: fixed; inset: 0; background: rgba(15,41,66,0.5);
+    z-index: 1040; opacity: 0; visibility: hidden;
+    transition: all 0.3s ease; backdrop-filter: blur(2px);
+}
+.drawer-overlay.open { opacity: 1; visibility: visible; }
 
-        .logo-placeholder {
-            width: 80px;
-            height: 80px;
-            background: linear-gradient(135deg, #375a7f, #2c4a6b);
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-        }
+.drawer {
+    position: fixed; top: 0; right: -300px; width: 280px; height: 100vh;
+    background: var(--surface); z-index: 1050;
+    box-shadow: -5px 0 25px rgba(0,0,0,0.15);
+    transition: right 0.3s ease; display: flex; flex-direction: column;
+}
+.drawer.open { right: 0; }
 
-        .logo-left .text-content h2 {
-            color: #2c3e50;
-            margin-bottom: 5px;
-            font-size: 18px;
-        }
+.drawer-header {
+    padding: 1.25rem 1rem; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--brand-50);
+}
+.drawer-header h3 { margin: 0; font-size: 1rem; font-weight: 800; color: var(--ink-900); }
+.drawer-close {
+    background: transparent; border: none; font-size: 1.25rem; color: var(--ink-500);
+    cursor: pointer; padding: 4px;
+}
 
-        .logo-left .text-content h5 {
-            color: #34495e;
-            margin-bottom: 3px;
-            font-size: 13px;
-        }
+.drawer-body { padding: 1rem; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.drawer-item {
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    text-decoration: none; color: var(--ink-700); font-weight: 600; font-size: 0.95rem;
+    border-radius: var(--radius-sm); transition: all 0.15s;
+}
+.drawer-item:hover { background: var(--brand-50); color: var(--brand-700); }
+.drawer-item svg { width: 20px; height: 20px; color: var(--brand-600); }
+.drawer-footer {
+    padding: 1rem; border-top: 1px solid var(--line);
+}
+.btn-logout {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; padding: 12px; background: var(--danger-100); color: var(--danger-700);
+    border: none; border-radius: var(--radius-sm); font-weight: 800; font-size: 0.95rem;
+    cursor: pointer; font-family: inherit; text-decoration: none;
+}
 
-        .logo-left .text-content p {
-            margin-bottom: 2px;
-            color: #7f8c8d;
-            font-size: 10px;
-        }
+/* ============================================================
+   BOTTOM NAV (5 TABS)
+============================================================ */
+.bottom-nav{
+    position:fixed;bottom:0;left:0;right:0;background:var(--surface);
+    border-top:1px solid var(--line);display:flex;z-index:60;
+    box-shadow:0 -4px 14px rgba(16,24,40,0.06);
+}
+.bottom-nav .nav-item{
+    flex:1;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:3px;padding:10px 4px 12px;text-decoration:none;
+    color:var(--ink-500);font-size:0.68rem;font-weight:600;transition:all 0.2s;
+    min-height:64px;position:relative;
+}
+.bottom-nav .nav-item:hover{color:var(--brand-600);background:var(--brand-50)}
+.bottom-nav .nav-item.active{color:var(--brand-700);background:var(--brand-50)}
+.bottom-nav .nav-item.active::before{
+    content:'';position:absolute;top:0;left:12%;right:12%;height:3px;
+    background:var(--yellow-accent);border-radius:0 0 3px 3px;
+    animation:fadeIn 0.3s ease-in-out;
+}
+.bottom-nav .nav-item .icon{font-size:1.35rem;line-height:1;font-weight:900}
+.bottom-nav .nav-item span:last-child{margin-top:2px}
 
-        /* Profile Photo Section */
-        .photo-section {
-            text-align: center;
-            padding: 15px;
-            background: white;
-            border-radius: 12px;
-            min-width: 180px;
-        }
+@keyframes fadeIn {
+    from { opacity: 0; transform: scaleX(0.5); }
+    to { opacity: 1; transform: scaleX(1); }
+}
 
-        .profile-photo {
-            width: 150px;
-            height: 150px;
-            background: #f0f0f0;
-            border: 3px solid #dee2e6;
-            border-radius: 12px;
-            overflow: hidden;
-            margin: 0 auto;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }
+/* ============================================================
+   RESPONSIVE
+============================================================ */
+@media (min-width:700px){
+    .main{padding-bottom:2rem}
+    .bottom-nav{
+        position:static;max-width:640px;margin:0 auto 2rem;
+        border-radius:var(--radius);border:1px solid var(--line);
+        box-shadow:var(--shadow-sm);
+    }
+    .field-row.two{grid-template-columns:1fr 1fr}
+    .field-row.three{grid-template-columns:1fr 1fr 1fr}
+    .bottom-nav .nav-item{font-size:0.75rem}
+}
 
-        .profile-photo img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
+@media (max-width:540px){
+    html{font-size:17px}
+    .main{padding:0.85rem 0.75rem 6rem}
+    .id-card-top{padding:1rem 0.9rem;gap:0.85rem}
+    .id-photo{width:68px;height:68px}
+    .id-info h2{font-size:1.1rem}
+    .section-head{padding:0.75rem 0.9rem}
+    .section-body{padding:0.9rem 0.9rem 1rem}
+    .app-brand .brand-sub{display:none}
+    .bottom-nav .nav-item{font-size:0.65rem}
+    .bottom-nav .nav-item .icon{font-size:1.25rem}
+}
 
-        .profile-photo-placeholder {
-            width: 100%;
-            height: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 3rem;
-            color: #adb5bd;
-            background: #f8f9fa;
-        }
-
-        .photo-upload-btn {
-            margin-top: 12px;
-            padding: 6px 15px;
-            background: #375a7f;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 0.8rem;
-            cursor: pointer;
-            transition: all 0.3s;
-            width: 100%;
-        }
-
-        .photo-upload-btn:hover {
-            background: #2c4a6b;
-            transform: translateY(-2px);
-        }
-
-        .photo-status {
-            margin-top: 8px;
-            font-size: 0.7rem;
-            padding: 4px 8px;
-            border-radius: 4px;
-        }
-
-        .photo-status.pending {
-            background: #fff3cd;
-            color: #856404;
-        }
-
-        .photo-status.approved {
-            background: #d4edda;
-            color: #155724;
-        }
-
-        /* Form Sections */
-        .form-section {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            margin-bottom: 20px;
-            overflow: hidden;
-        }
-
-        .section-title {
-            background: #e9ecef;
-            padding: 10px 15px;
-            font-weight: bold;
-            color: #495057;
-            border-left: 4px solid #375a7f;
-            margin: 0;
-        }
-
-        .section-body {
-            padding: 20px;
-        }
-
-        .info-row {
-            margin-bottom: 15px;
-        }
-
-        .info-label {
-            font-size: 0.7rem;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            color: #6c757d;
-            font-weight: 600;
-            margin-bottom: 5px;
-        }
-
-        .info-value {
-            font-size: 0.95rem;
-            color: #2c3e50;
-            padding: 8px 12px;
-            background: #f8f9fa;
-            border-radius: 6px;
-            word-break: break-word;
-        }
-
-        .info-value.editable {
-            background: white;
-            border: 1px solid #dee2e6;
-        }
-
-        .info-value.editable:focus {
-            border-color: #375a7f;
-            outline: none;
-            box-shadow: 0 0 0 2px rgba(55,90,127,0.1);
-        }
-
-        /* Action Buttons */
-        .action-buttons {
-            display: flex;
-            gap: 10px;
-            justify-content: flex-end;
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 1px solid #e9ecef;
-        }
-
-        .btn-save {
-            background: #28a745;
-            color: white;
-            border: none;
-            padding: 10px 25px;
-            border-radius: 6px;
-            font-weight: 500;
-            transition: all 0.3s;
-        }
-
-        .btn-save:hover {
-            background: #218838;
-            transform: translateY(-2px);
-        }
-
-        .btn-print {
-            background: #6c757d;
-            color: white;
-            border: none;
-            padding: 10px 25px;
-            border-radius: 6px;
-            font-weight: 500;
-            transition: all 0.3s;
-        }
-
-        .btn-print:hover {
-            background: #5a6268;
-            transform: translateY(-2px);
-        }
-
-        /* Read-only indicator */
-        .readonly-badge {
-            display: inline-block;
-            font-size: 0.6rem;
-            background: #e9ecef;
-            color: #6c757d;
-            padding: 2px 6px;
-            border-radius: 10px;
-            margin-left: 8px;
-        }
-
-        @media (max-width: 768px) {
-            .logo-section {
-                flex-direction: column;
-                gap: 20px;
-            }
-            
-            .logo-left {
-                flex-direction: column;
-                text-align: center;
-            }
-            
-            .action-buttons {
-                flex-direction: column;
-            }
-        }
-        
-        /* Print Styles */
-        @media print {
-            #sidebar-wrapper, .navbar, .action-buttons, .photo-upload-btn, .menu-toggle {
-                display: none !important;
-            }
-            #page-content-wrapper {
-                margin: 0;
-                padding: 0;
-            }
-            .profile-container {
-                padding: 0;
-            }
-            .photo-section {
-                page-break-inside: avoid;
-            }
-            .form-section {
-                page-break-inside: avoid;
-            }
-        }
-    </style>
+@media print{
+    .app-header,.bottom-nav,.actions,.photo-btn,.header-actions,.upload-progress{display:none!important}
+    body{background:#fff}
+    .main{padding:0;max-width:100%}
+    .id-card-top{background:#1e3a5a!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .section-head{background:#1e3a5a!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+    .section,.id-card{box-shadow:none;break-inside:avoid;margin-bottom:8px}
+    html{font-size:11px}
+    .field .val{background:#fff;border:1px solid #ccc;padding:3px 6px;min-height:0}
+    .field input.val{background:#fff;border:none}
+}
+</style>
 </head>
 <body>
-    <div id="wrapper">
-        <!-- Sidebar -->
-        <div id="sidebar-wrapper">
-            <div class="sidebar-heading">
-                <img src="../assets/images/harana-logo.png" alt="Harana" onerror="this.src=''; this.onerror=null; this.innerHTML='Harana';">
-                <span>Harana</span>
-                <button class="menu-toggle" id="menuToggle"><i class="fas fa-bars"></i></button>
+
+<!-- Drawer Overlay -->
+<div class="drawer-overlay" id="drawerOverlay"></div>
+
+<!-- Drawer Sidebar -->
+<div class="drawer" id="sideDrawer">
+    <div class="drawer-header">
+        <h3>Menu</h3>
+        <button class="drawer-close" id="closeDrawer">&times;</button>
+    </div>
+    <div class="drawer-body">
+        <a href="beneficiary.php" class="drawer-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            Beneficiary
+        </a>
+        <a href="organization.php" class="drawer-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M3 7v14M21 7v14M6 7h12M6 3h12v4H6zM9 11h1M14 11h1M9 15h1M14 15h1"/></svg>
+            Organization
+        </a>
+        <?php if ($is_admin): ?>
+        <a href="../admin/dashboard.php" class="drawer-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7z"/></svg>
+            Admin Panel
+        </a>
+        <?php endif; ?>
+    </div>
+    <div class="drawer-footer">
+        <a href="../logout.php" class="btn-logout" onclick="return confirm('Sign out of your account?');">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:18px;height:18px;"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            Sign Out
+        </a>
+    </div>
+</div>
+
+<!-- App Header -->
+<header class="app-header">
+    <div class="app-brand">
+        <div class="logo-wrap">
+            <img src="../assets/images/harana-logo.png" alt="NHGL"
+                 onerror="this.style.display='none';this.parentNode.textContent='NH';">
+        </div>
+        <div class="brand-text">
+            <span class="brand-name">NHGL</span>
+            <span class="brand-sub">Nagkaisang Haranista</span>
+        </div>
+    </div>
+    <div class="header-actions">
+        <!-- 3 Dots Menu Button -->
+        <button class="icon-btn" id="openDrawer" aria-label="Menu">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+        </button>
+    </div>
+</header>
+
+<main class="main">
+
+    <?php if ($message): ?>
+        <div class="alert alert-success">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+            <span><?php echo htmlspecialchars($message); ?></span>
+        </div>
+    <?php endif; ?>
+    <?php if ($error): ?>
+        <div class="alert alert-danger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span><?php echo htmlspecialchars($error); ?></span>
+        </div>
+    <?php endif; ?>
+
+    <!-- ID CARD -->
+    <div class="id-card">
+        <div class="id-card-top">
+            <div class="id-photo" id="profilePhotoContainer">
+                <?php if ($photo_to_show): ?>
+                    <img src="<?php echo htmlspecialchars($photo_to_show); ?>" alt="Profile photo" id="profilePhoto">
+                <?php else: ?>
+                    <span class="initials"><?php echo htmlspecialchars($initials); ?></span>
+                <?php endif; ?>
             </div>
-            <div class="list-group list-group-flush mt-2">
-                <a href="dashboard.php" class="list-group-item"><i class="fas fa-tachometer-alt"></i><span>Dashboard</span></a>
-                <a href="profile.php" class="list-group-item active"><i class="fas fa-user"></i><span>My Profile</span></a>
-                <a href="payments.php" class="list-group-item"><i class="fas fa-credit-card"></i><span>Payment History</span></a>
-                <a href="beneficiary.php" class="list-group-item"><i class="fas fa-heart"></i><span>Beneficiary</span></a>
-                <a href="notifications.php" class="list-group-item"><i class="fas fa-bell"></i><span>Notifications</span></a>
-                <a href="organization.php" class="list-group-item"><i class="fas fa-building"></i><span>Organization</span></a>
-                <a href="support.php" class="list-group-item"><i class="fas fa-life-ring"></i><span>Support</span></a>
-                <a href="../logout.php" class="list-group-item" onclick="return confirm('Are you sure?');"><i class="fas fa-sign-out-alt"></i><span>Logout</span></a>
+            <div class="id-info">
+                <span class="member-code"><?php echo htmlspecialchars($member['member_code']); ?></span>
+                <h2><?php echo htmlspecialchars($full_name); ?></h2>
+                <div class="chips">
+                    <span class="chip <?php echo $status_class; ?>"><?php echo ucfirst($status); ?></span>
+                    <?php if (!empty($member['chapter'])): ?>
+                        <span class="chip chip-dim"><?php echo htmlspecialchars($member['chapter']); ?></span>
+                    <?php endif; ?>
+                </div>
             </div>
         </div>
 
-        <!-- Main Content -->
-        <div id="page-content-wrapper">
-            <?php 
-            $page_title = 'My Profile';
-            include '../includes/header.php'; 
-            ?>
-
-            <div class="profile-container">
-                <?php if ($message): ?>
-                    <div class="alert alert-success alert-dismissible fade show">
-                        <i class="fas fa-check-circle me-2"></i><?php echo $message; ?>
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
-                <?php endif; ?>
-                <?php if ($error): ?>
-                    <div class="alert alert-danger alert-dismissible fade show">
-                        <i class="fas fa-exclamation-circle me-2"></i><?php echo $error; ?>
-                        <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
-                    </div>
-                <?php endif; ?>
-
-                <!-- Header with Logo and Profile Photo -->
-                <div class="profile-header-section">
-                    <div class="logo-section">
-                        <div class="logo-left">
-                            <img src="../assets/images/harana-logo.png" alt="Harana Logo" onerror="this.style.display='none'; this.parentNode.querySelector('.logo-placeholder').style.display='flex';">
-                            <div class="logo-placeholder" style="display: none;">
-                                <i class="fas fa-hand-holding-heart fa-3x"></i>
-                            </div>
-                            <div class="text-content">
-                                <h2>NAGKAISANG HARANISTA</h2>
-                                <h5>SA GINTONG LUZON, PHILS. INC. (NHGL, INC.)</h5>
-                                <p class="small">(Formerly Nagkaisang Hiranista Sa Gintong Luzon, Inc.)</p>
-                                <p class="small">(Sec. REG No. CN 700172104)</p>
-                                <p class="small">MF 2024<br>Bryg. Singalat, Palayan City<br>Province of Nueva Ecija<br>Tel. No. (044)940-6708</p>
-                            </div>
-                        </div>
-                        
-                        <div class="photo-section">
-                            <div class="profile-photo" id="profilePhotoContainer">
-                                <?php 
-                                $photo_to_show = null;
-                                if ($has_pending_photo && $pending_photo_path) {
-                                    $photo_to_show = $pending_photo_path;
-                                } elseif ($current_photo) {
-                                    $photo_to_show = '../' . $current_photo;
-                                }
-                                ?>
-                                <?php if ($photo_to_show): ?>
-                                    <img src="<?php echo $photo_to_show; ?>" alt="Profile Photo" id="profilePhoto">
-                                <?php else: ?>
-                                    <div class="profile-photo-placeholder">
-                                        <i class="fas fa-user-circle"></i>
-                                    </div>
-                                <?php endif; ?>
-                            </div>
-                            <button class="photo-upload-btn" id="uploadPhotoBtn">
-                                <i class="fas fa-camera me-1"></i> Change Photo
-                            </button>
-                            <?php if ($has_pending_photo): ?>
-                                <div class="photo-status pending">
-                                    <i class="fas fa-clock me-1"></i> Pending Approval
-                                </div>
-                            <?php endif; ?>
-                            <input type="file" id="photoInput" accept="image/*" style="display: none;">
-                            <div id="uploadProgress" style="display: none; margin-top: 10px;">
-                                <div class="progress" style="height: 5px;">
-                                    <div class="progress-bar progress-bar-striped progress-bar-animated" style="width: 0%"></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Application Form -->
-                <h4 class="form-title text-center mb-3" style="color: #2c3e50;">APPLICATION FOR MEMBERSHIP</h4>
-
-                <form method="POST" id="profileForm">
-                    <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>">
-                    <input type="hidden" name="update_profile" value="1">
-                    
-                    <!-- I. PERSONAL INFORMATION -->
-                    <div class="form-section">
-                        <div class="section-title">I. PERSONAL INFORMATION</div>
-                        <div class="section-body">
-                            <div class="row">
-                                <div class="col-md-3 mb-3">
-                                    <div class="info-label">Member Code</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['member_code'] ?? 'N/A'); ?></div>
-                                </div>
-                                <div class="col-md-3 mb-3">
-                                    <div class="info-label">Date Joined</div>
-                                    <div class="info-value"><?php echo !empty($member['date_joined']) ? date('F j, Y', strtotime($member['date_joined'])) : 'N/A'; ?></div>
-                                </div>
-                                <div class="col-md-3 mb-3">
-                                    <div class="info-label">Monthly Contribution</div>
-                                    <div class="info-value">₱<?php echo number_format($member['monthly_contribution'] ?? 100, 2); ?></div>
-                                </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-4 mb-3">
-                                    <div class="info-label">Last Name</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['last_name'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-4 mb-3">
-                                    <div class="info-label">First Name</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['first_name'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-4 mb-3">
-                                    <div class="info-label">Middle Name</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['middle_name'] ?? ''); ?></div>
-                                </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-3 mb-3">
-                                    <div class="info-label">Date of Birth</div>
-                                    <div class="info-value"><?php echo !empty($member['birth_date']) && $member['birth_date'] != '0000-00-00' ? date('F j, Y', strtotime($member['birth_date'])) : 'Not specified'; ?></div>
-                                </div>
-                                <div class="col-md-3 mb-3">
-                                    <div class="info-label">Place of Birth</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['place_of_birth'] ?? 'Not specified'); ?></div>
-                                </div>
-                                <div class="col-md-2 mb-3">
-                                    <div class="info-label">Age</div>
-                                    <div class="info-value"><?php echo $member['age'] ?? 'N/A'; ?></div>
-                                </div>
-                                <div class="col-md-2 mb-3">
-                                    <div class="info-label">Gender</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['gender'] ?? 'Not specified'); ?></div>
-                                </div>
-                                <div class="col-md-2 mb-3">
-                                    <div class="info-label">Civil Status</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['civil_status'] ?? 'Not specified'); ?></div>
-                                </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-4 mb-3">
-                                    <div class="info-label">Religion</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['religion'] ?? 'Not specified'); ?></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- II. ADDRESS INFORMATION -->
-                    <div class="form-section">
-                        <div class="section-title">II. ADDRESS INFORMATION</div>
-                        <div class="section-body">
-                            <div class="row">
-                                <div class="col-md-3 mb-3">
-                                    <div class="info-label">Province</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['province'] ?? 'Not specified'); ?></div>
-                                </div>
-                                <div class="col-md-3 mb-3">
-                                    <div class="info-label">City/Municipality</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['city'] ?? 'Not specified'); ?></div>
-                                </div>
-                                <div class="col-md-3 mb-3">
-                                    <div class="info-label">Barangay</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['barangay'] ?? 'Not specified'); ?></div>
-                                </div>
-                                <div class="col-md-3 mb-3">
-                                    <div class="info-label">Street/Purok/Sitio</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['street'] ?? 'Not specified'); ?></div>
-                                </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-6 mb-3">
-                                    <div class="info-label">Present Address</div>
-                                    <input type="text" name="present_address" class="info-value editable w-100" value="<?php echo htmlspecialchars($member['present_address'] ?? ''); ?>">
-                                </div>
-                                <div class="col-md-6 mb-3">
-                                    <div class="info-label">Permanent Address</div>
-                                    <input type="text" name="permanent_address" class="info-value editable w-100" value="<?php echo htmlspecialchars($member['permanent_address'] ?? ''); ?>">
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- III. CONTACT INFORMATION -->
-                    <div class="form-section">
-                        <div class="section-title">III. CONTACT INFORMATION</div>
-                        <div class="section-body">
-                            <div class="row">
-                                <div class="col-md-4 mb-3">
-                                    <div class="info-label">Contact Number</div>
-                                    <input type="text" name="contact_number" class="info-value editable w-100" value="<?php echo htmlspecialchars($member['contact_number'] ?? ''); ?>">
-                                </div>
-                                <div class="col-md-4 mb-3">
-                                    <div class="info-label">Alternate Number</div>
-                                    <input type="text" name="alternate_number" class="info-value editable w-100" value="<?php echo htmlspecialchars($member['alternate_number'] ?? ''); ?>">
-                                </div>
-                                <div class="col-md-4 mb-3">
-                                    <div class="info-label">Email Address</div>
-                                    <input type="email" name="email" class="info-value editable w-100" value="<?php echo htmlspecialchars($member['email'] ?? ''); ?>">
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- IV. FAMILY BACKGROUND -->
-                    <div class="form-section">
-                        <div class="section-title">IV. FAMILY BACKGROUND</div>
-                        <div class="section-body">
-                            <div class="row mb-3">
-                                <div class="col-md-12"><div class="info-label">Father's Full Name:</div></div>
-                                <div class="col-md-4">
-                                    <div class="info-value"><?php echo htmlspecialchars($member['father_fname'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="info-value"><?php echo htmlspecialchars($member['father_mname'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="info-value"><?php echo htmlspecialchars($member['father_lname'] ?? ''); ?></div>
-                                </div>
-                            </div>
-                            <div class="row mb-3">
-                                <div class="col-md-12"><div class="info-label">Mother's Full Name (Maiden Name):</div></div>
-                                <div class="col-md-4">
-                                    <div class="info-value"><?php echo htmlspecialchars($member['mother_fname'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="info-value"><?php echo htmlspecialchars($member['mother_mname'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="info-value"><?php echo htmlspecialchars($member['mother_lname'] ?? ''); ?></div>
-                                </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-12"><div class="info-label">Spouse's Full Name (If Married):</div></div>
-                                <div class="col-md-3">
-                                    <div class="info-value"><?php echo htmlspecialchars($member['spouse_fname'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="info-value"><?php echo htmlspecialchars($member['spouse_mname'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="info-value"><?php echo htmlspecialchars($member['spouse_lname'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="info-value"><?php echo $member['spouse_age'] ?? ''; ?></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- V. CHILDREN -->
-                    <div class="form-section">
-                        <div class="section-title">V. CHILDREN</div>
-                        <div class="section-body">
-                            <?php for ($i = 1; $i <= 4; $i++): ?>
-                            <div class="row mb-2">
-                                <div class="col-md-1"><div class="info-label"><?php echo $i; ?>.</div></div>
-                                <div class="col-md-3"><div class="info-value"><?php echo htmlspecialchars($member["child{$i}_fname"] ?? ''); ?></div></div>
-                                <div class="col-md-3"><div class="info-value"><?php echo htmlspecialchars($member["child{$i}_mname"] ?? ''); ?></div></div>
-                                <div class="col-md-3"><div class="info-value"><?php echo htmlspecialchars($member["child{$i}_lname"] ?? ''); ?></div></div>
-                                <div class="col-md-2"><div class="info-value"><?php echo $member["child{$i}_age"] ?? ''; ?></div></div>
-                            </div>
-                            <?php endfor; ?>
-                        </div>
-                    </div>
-
-                    <!-- VI. CHARACTER REFERENCES -->
-                    <div class="form-section">
-                        <div class="section-title">VI. CHARACTER REFERENCES</div>
-                        <div class="section-body">
-                            <div class="row mb-2">
-                                <div class="col-md-5">
-                                    <div class="info-label">Name of Reference 1</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['ref1_name'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-7">
-                                    <div class="info-label">Contact Number</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['ref1_contact'] ?? ''); ?></div>
-                                </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-5">
-                                    <div class="info-label">Name of Reference 2</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['ref2_name'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-7">
-                                    <div class="info-label">Contact Number</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['ref2_contact'] ?? ''); ?></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- VII. BENEFICIARY INFORMATION -->
-                    <div class="form-section">
-                        <div class="section-title">VII. BENEFICIARY INFORMATION</div>
-                        <div class="section-body">
-                            <div class="row mb-2">
-                                <div class="col-md-4">
-                                    <div class="info-label">Full Name of Beneficiary</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['beneficiary_name'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-4">
-                                    <div class="info-label">Complete Address</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['beneficiary_address'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-2">
-                                    <div class="info-label">Relationship</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['beneficiary_relation'] ?? ''); ?></div>
-                                </div>
-                                <div class="col-md-2">
-                                    <div class="info-label">Age</div>
-                                    <div class="info-value"><?php echo $member['beneficiary_age'] ?? ''; ?></div>
-                                </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-4">
-                                    <div class="info-label">Contact Number of Beneficiary</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['beneficiary_contact'] ?? ''); ?></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- VIII. CHAPTER INFORMATION -->
-                    <div class="form-section">
-                        <div class="section-title">VIII. CHAPTER INFORMATION</div>
-                        <div class="section-body">
-                            <div class="row mb-2">
-                                <div class="col-md-3">
-                                    <div class="info-label">Chapter</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['chapter'] ?? 'Not assigned'); ?></div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="info-label">Group Name</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['group_name'] ?? 'Not assigned'); ?></div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="info-label">Leader</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['leader'] ?? 'Not assigned'); ?></div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="info-label">Coordinator</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['coordinator'] ?? 'Not assigned'); ?></div>
-                                </div>
-                            </div>
-                            <div class="row mb-2">
-                                <div class="col-md-3">
-                                    <div class="info-label">Chairman</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['chairman'] ?? 'Not assigned'); ?></div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="info-label">Screening Officer</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['screening_officer'] ?? 'Not assigned'); ?></div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="info-label">Screening Date</div>
-                                    <div class="info-value"><?php echo !empty($member['screening_date']) ? date('F j, Y', strtotime($member['screening_date'])) : 'Not set'; ?></div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="info-label">Approved By</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['approved_by'] ?? 'Not assigned'); ?></div>
-                                </div>
-                            </div>
-                            <div class="row">
-                                <div class="col-md-3">
-                                    <div class="info-label">Date Registered</div>
-                                    <div class="info-value"><?php echo !empty($member['date_registered']) ? date('F j, Y', strtotime($member['date_registered'])) : 'Not set'; ?></div>
-                                </div>
-                                <div class="col-md-3">
-                                    <div class="info-label">Status</div>
-                                    <div class="info-value"><span class="badge bg-<?php echo ($member['status'] ?? 'active') == 'active' ? 'success' : 'warning'; ?>"><?php echo ucfirst($member['status'] ?? 'active'); ?></span></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- IX. ACCOUNT INFORMATION -->
-                    <div class="form-section">
-                        <div class="section-title">IX. ACCOUNT INFORMATION</div>
-                        <div class="section-body">
-                            <div class="row">
-                                <div class="col-md-4">
-                                    <div class="info-label">Username</div>
-                                    <div class="info-value"><?php echo htmlspecialchars($member['username'] ?? 'Not set'); ?></div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Action Buttons -->
-                    <div class="action-buttons">
-                        <button type="submit" class="btn-save">
-                            <i class="fas fa-save me-2"></i> Save Changes
-                        </button>
-                        <button type="button" class="btn-print" id="printBtn">
-                            <i class="fas fa-print me-2"></i> Print / Export PDF
-                        </button>
-                    </div>
-                </form>
+        <div class="photo-actions">
+            <button type="button" class="photo-btn" id="uploadPhotoBtn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+                Change photo
+            </button>
+            <?php if ($has_pending_photo): ?>
+                <span class="photo-status pending">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    Pending approval
+                </span>
+            <?php endif; ?>
+            <input type="file" id="photoInput" accept="image/*" style="display:none">
+            <div class="upload-progress" id="uploadProgress">
+                <div class="bar-track"><div class="bar-fill"></div></div>
             </div>
+        </div>
+
+        <div class="org-block">
+            <h3>Organization</h3>
+            <p class="org-name">NAGKAISANG HARANISTA SA GINTONG LUZON, PHILS. INC.</p>
+            <p class="org-line">Formerly Nagkaisang Hiranista Sa Gintong Luzon, Inc. · SEC Reg. No. CN 700172104</p>
+            <p class="org-line">MF 2024, Brgy. Singalat, Palayan City, Nueva Ecija · Tel. (044) 940-6708</p>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
-    <script>
-        // Sidebar Toggle
-        const menuToggle = document.getElementById('menuToggle');
-        const sidebar = document.getElementById('sidebar-wrapper');
-        const headerLogo = document.getElementById('headerLogo');
-        
-        const sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
-        if (sidebarCollapsed) sidebar.classList.add('collapsed');
-        
-        if (menuToggle) {
-            menuToggle.addEventListener('click', function() {
-                sidebar.classList.toggle('collapsed');
-                localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed'));
-            });
-        }
+    <!-- FORM -->
+    <form method="POST" id="profileForm">
+        <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>">
+        <input type="hidden" name="update_profile" value="1">
 
-        // Handle logo fallback
-        const sidebarLogo = document.querySelector('.sidebar-heading img');
-        if (sidebarLogo) {
-            sidebarLogo.onerror = function() {
-                this.style.display = 'none';
-                this.nextSibling.textContent = 'Harana';
-            };
-        }
-        if (headerLogo) {
-            headerLogo.onerror = function() {
-                this.style.display = 'none';
-            };
-        }
+        <!-- I -->
+        <div class="section">
+            <div class="section-head">
+                <span class="num-badge">I</span>
+                <h2>Personal Information</h2>
+            </div>
+            <div class="section-body">
+                <div class="fields">
+                    <div class="field-row two">
+                        <div class="field">
+                            <span class="lbl">Member Code</span>
+                            <div class="val"><?php echo pv($member['member_code'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Date Joined</span>
+                            <div class="val"><?php echo !empty($member['date_joined']) ? date('F j, Y', strtotime($member['date_joined'])) : '—'; ?></div>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <span class="lbl">Monthly Contribution</span>
+                        <div class="val">₱<?php echo number_format((float)($member['monthly_contribution'] ?? 100), 2); ?></div>
+                    </div>
 
-        // Photo Upload Functionality
-        const uploadBtn = document.getElementById('uploadPhotoBtn');
-        const photoInput = document.getElementById('photoInput');
-        const profilePhotoContainer = document.getElementById('profilePhotoContainer');
-        const uploadProgress = document.getElementById('uploadProgress');
-        
-        uploadBtn.addEventListener('click', function() {
-            photoInput.click();
-        });
-        
-        photoInput.addEventListener('change', function() {
-            const file = this.files[0];
-            if (!file) return;
-            
-            // Validate file type
-            const validTypes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
-            if (!validTypes.includes(file.type)) {
-                alert('Invalid file type. Please select a JPG, PNG, GIF, or WEBP image.');
-                return;
-            }
-            
-            // Validate file size (5MB)
-            if (file.size > 5 * 1024 * 1024) {
-                alert('File size must be less than 5MB.');
-                return;
-            }
-            
-            // Show preview
-            const reader = new FileReader();
-            reader.onload = function(e) {
-                profilePhotoContainer.innerHTML = `<img src="${e.target.result}" alt="Profile Photo" id="profilePhoto">`;
-            };
-            reader.readAsDataURL(file);
-            
-            // Upload to server
-            const formData = new FormData();
-            formData.append('csrf_token', '<?php echo $csrf_token; ?>');
-            formData.append('photo', file);
-            
-            uploadProgress.style.display = 'block';
-            let progress = 0;
-            const interval = setInterval(function() {
-                progress += 10;
-                uploadProgress.querySelector('.progress-bar').style.width = progress + '%';
-                if (progress >= 100) clearInterval(interval);
-            }, 100);
-            
-            $.ajax({
-                url: 'upload_member_photo.php',
-                type: 'POST',
-                data: formData,
-                processData: false,
-                contentType: false,
-                success: function(response) {
-                    clearInterval(interval);
-                    uploadProgress.querySelector('.progress-bar').style.width = '100%';
-                    
-                    setTimeout(function() {
-                        uploadProgress.style.display = 'none';
-                        
-                        if (response.success) {
-                            // Show success message
-                            const alertHtml = `<div class="alert alert-info alert-dismissible fade show">${response.message}<button type="button" class="btn-close" data-bs-dismiss="alert"></button></div>`;
-                            document.querySelector('.profile-container').insertAdjacentHTML('afterbegin', alertHtml);
-                            
-                            // Add pending status
-                            if (!document.querySelector('.photo-status')) {
-                                const statusHtml = `<div class="photo-status pending mt-2"><i class="fas fa-clock me-1"></i> Pending Approval</div>`;
-                                document.querySelector('.photo-section').insertAdjacentHTML('beforeend', statusHtml);
-                            }
-                            
-                            // Reload page after 2 seconds to show pending status
-                            setTimeout(function() {
-                                location.reload();
-                            }, 2000);
-                        } else {
-                            alert(response.message);
-                            // Reload original photo
-                            location.reload();
+                    <div class="field-group">
+                        <div class="field-group-label">Full Name</div>
+                        <div class="field">
+                            <span class="lbl">Last Name</span>
+                            <div class="val"><?php echo pv($member['last_name'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">First Name</span>
+                            <div class="val"><?php echo pv($member['first_name'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Middle Name</span>
+                            <div class="val <?php echo empty($member['middle_name']) ? 'empty' : ''; ?>"><?php echo pv($member['middle_name'] ?? ''); ?></div>
+                        </div>
+                    </div>
+
+                    <div class="field">
+                        <span class="lbl">Date of Birth</span>
+                        <div class="val"><?php echo (!empty($member['birth_date']) && $member['birth_date'] !== '0000-00-00') ? date('F j, Y', strtotime($member['birth_date'])) : '—'; ?></div>
+                    </div>
+                    <div class="field">
+                        <span class="lbl">Place of Birth</span>
+                        <div class="val <?php echo empty($member['place_of_birth']) ? 'empty' : ''; ?>"><?php echo pv($member['place_of_birth'] ?? 'Not specified'); ?></div>
+                    </div>
+
+                    <div class="field-row two">
+                        <div class="field">
+                            <span class="lbl">Age</span>
+                            <div class="val"><?php echo pv($member['age'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Gender</span>
+                            <div class="val <?php echo empty($member['gender']) ? 'empty' : ''; ?>"><?php echo pv($member['gender'] ?? 'Not specified'); ?></div>
+                        </div>
+                    </div>
+
+                    <div class="field-row two">
+                        <div class="field">
+                            <span class="lbl">Civil Status</span>
+                            <div class="val <?php echo empty($member['civil_status']) ? 'empty' : ''; ?>"><?php echo pv($member['civil_status'] ?? 'Not specified'); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Religion</span>
+                            <div class="val <?php echo empty($member['religion']) ? 'empty' : ''; ?>"><?php echo pv($member['religion'] ?? 'Not specified'); ?></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- II -->
+        <div class="section">
+            <div class="section-head">
+                <span class="num-badge">II</span>
+                <h2>Address Information</h2>
+            </div>
+            <div class="section-body">
+                <div class="fields">
+                    <div class="field">
+                        <span class="lbl">Province</span>
+                        <div class="val <?php echo empty($member['province']) ? 'empty' : ''; ?>"><?php echo pv($member['province'] ?? 'Not specified'); ?></div>
+                    </div>
+                    <div class="field">
+                        <span class="lbl">City / Municipality</span>
+                        <div class="val <?php echo empty($member['city']) ? 'empty' : ''; ?>"><?php echo pv($member['city'] ?? 'Not specified'); ?></div>
+                    </div>
+                    <div class="field-row two">
+                        <div class="field">
+                            <span class="lbl">Barangay</span>
+                            <div class="val <?php echo empty($member['barangay']) ? 'empty' : ''; ?>"><?php echo pv($member['barangay'] ?? 'Not specified'); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Street / Purok</span>
+                            <div class="val <?php echo empty($member['street']) ? 'empty' : ''; ?>"><?php echo pv($member['street'] ?? 'Not specified'); ?></div>
+                        </div>
+                    </div>
+
+                    <div class="field-group">
+                        <div class="field-group-label">Addresses (editable)</div>
+                        <div class="field">
+                            <span class="lbl">Present Address</span>
+                            <input type="text" name="present_address" class="val"
+                                   value="<?php echo htmlspecialchars($member['present_address'] ?? ''); ?>"
+                                   placeholder="Enter your present address">
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Permanent Address</span>
+                            <input type="text" name="permanent_address" class="val"
+                                   value="<?php echo htmlspecialchars($member['permanent_address'] ?? ''); ?>"
+                                   placeholder="Enter your permanent address">
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- III -->
+        <div class="section">
+            <div class="section-head">
+                <span class="num-badge">III</span>
+                <h2>Contact Information</h2>
+            </div>
+            <div class="section-body">
+                <div class="fields">
+                    <div class="field">
+                        <span class="lbl">Contact Number</span>
+                        <input type="text" name="contact_number" class="val"
+                               value="<?php echo htmlspecialchars($member['contact_number'] ?? ''); ?>"
+                               placeholder="09XX XXX XXXX" inputmode="tel">
+                    </div>
+                    <div class="field">
+                        <span class="lbl">Alternate Number</span>
+                        <input type="text" name="alternate_number" class="val"
+                               value="<?php echo htmlspecialchars($member['alternate_number'] ?? ''); ?>"
+                               placeholder="Optional" inputmode="tel">
+                    </div>
+                    <div class="field">
+                        <span class="lbl">Email Address</span>
+                        <input type="email" name="email" class="val"
+                               value="<?php echo htmlspecialchars($member['email'] ?? ''); ?>"
+                               placeholder="you@example.com" inputmode="email"
+                               autocomplete="email">
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- IV -->
+        <div class="section">
+            <div class="section-head">
+                <span class="num-badge">IV</span>
+                <h2>Family Background</h2>
+            </div>
+            <div class="section-body">
+                <div class="fields">
+                    <div class="field-group">
+                        <div class="field-group-label">Father's Full Name</div>
+                        <div class="field">
+                            <span class="lbl">First Name</span>
+                            <div class="val <?php echo empty($member['father_fname']) ? 'empty' : ''; ?>"><?php echo pv($member['father_fname'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Middle Name</span>
+                            <div class="val <?php echo empty($member['father_mname']) ? 'empty' : ''; ?>"><?php echo pv($member['father_mname'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Last Name</span>
+                            <div class="val <?php echo empty($member['father_lname']) ? 'empty' : ''; ?>"><?php echo pv($member['father_lname'] ?? ''); ?></div>
+                        </div>
+                    </div>
+
+                    <div class="field-group">
+                        <div class="field-group-label">Mother's Maiden Name</div>
+                        <div class="field">
+                            <span class="lbl">First Name</span>
+                            <div class="val <?php echo empty($member['mother_fname']) ? 'empty' : ''; ?>"><?php echo pv($member['mother_fname'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Middle Name</span>
+                            <div class="val <?php echo empty($member['mother_mname']) ? 'empty' : ''; ?>"><?php echo pv($member['mother_mname'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Last Name</span>
+                            <div class="val <?php echo empty($member['mother_lname']) ? 'empty' : ''; ?>"><?php echo pv($member['mother_lname'] ?? ''); ?></div>
+                        </div>
+                    </div>
+
+                    <div class="field-group">
+                        <div class="field-group-label">Spouse (If Married)</div>
+                        <div class="field">
+                            <span class="lbl">First Name</span>
+                            <div class="val <?php echo empty($member['spouse_fname']) ? 'empty' : ''; ?>"><?php echo pv($member['spouse_fname'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Middle Name</span>
+                            <div class="val <?php echo empty($member['spouse_mname']) ? 'empty' : ''; ?>"><?php echo pv($member['spouse_mname'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Last Name</span>
+                            <div class="val <?php echo empty($member['spouse_lname']) ? 'empty' : ''; ?>"><?php echo pv($member['spouse_lname'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Age</span>
+                            <div class="val <?php echo empty($member['spouse_age']) ? 'empty' : ''; ?>"><?php echo pv($member['spouse_age'] ?? ''); ?></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- V -->
+        <div class="section">
+            <div class="section-head">
+                <span class="num-badge">V</span>
+                <h2>Children</h2>
+            </div>
+            <div class="section-body">
+                <div class="fields">
+                    <?php
+                    $has_children = false;
+                    for ($i = 1; $i <= 4; $i++) {
+                        if (!empty($member["child{$i}_fname"]) || !empty($member["child{$i}_lname"])) {
+                            $has_children = true; break;
                         }
-                    }, 500);
-                },
-                error: function() {
-                    clearInterval(interval);
-                    uploadProgress.style.display = 'none';
-                    alert('An error occurred while uploading the photo. Please try again.');
+                    }
+                    if (!$has_children): ?>
+                        <div class="empty-block">No children listed.</div>
+                    <?php else:
+                        for ($i = 1; $i <= 4; $i++):
+                            $cfn = $member["child{$i}_fname"] ?? '';
+                            $cmn = $member["child{$i}_mname"] ?? '';
+                            $cln = $member["child{$i}_lname"] ?? '';
+                            $cag = $member["child{$i}_age"] ?? '';
+                            if (empty($cfn) && empty($cln)) continue;
+                    ?>
+                        <div class="field-group">
+                            <div class="field-group-label">Child <?php echo $i; ?></div>
+                            <div class="field-row two">
+                                <div class="field">
+                                    <span class="lbl">First Name</span>
+                                    <div class="val"><?php echo pv($cfn); ?></div>
+                                </div>
+                                <div class="field">
+                                    <span class="lbl">Middle Name</span>
+                                    <div class="val <?php echo empty($cmn) ? 'empty' : ''; ?>"><?php echo pv($cmn); ?></div>
+                                </div>
+                            </div>
+                            <div class="field-row two">
+                                <div class="field">
+                                    <span class="lbl">Last Name</span>
+                                    <div class="val"><?php echo pv($cln); ?></div>
+                                </div>
+                                <div class="field">
+                                    <span class="lbl">Age</span>
+                                    <div class="val <?php echo empty($cag) ? 'empty' : ''; ?>"><?php echo pv($cag); ?></div>
+                                </div>
+                            </div>
+                        </div>
+                    <?php endfor; endif; ?>
+                </div>
+            </div>
+        </div>
+
+        <!-- VI -->
+        <div class="section">
+            <div class="section-head">
+                <span class="num-badge">VI</span>
+                <h2>Character References</h2>
+            </div>
+            <div class="section-body">
+                <div class="fields">
+                    <div class="field-group">
+                        <div class="field-group-label">Reference 1</div>
+                        <div class="field">
+                            <span class="lbl">Name</span>
+                            <div class="val <?php echo empty($member['ref1_name']) ? 'empty' : ''; ?>"><?php echo pv($member['ref1_name'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Contact Number</span>
+                            <div class="val <?php echo empty($member['ref1_contact']) ? 'empty' : ''; ?>"><?php echo pv($member['ref1_contact'] ?? ''); ?></div>
+                        </div>
+                    </div>
+                    <div class="field-group">
+                        <div class="field-group-label">Reference 2</div>
+                        <div class="field">
+                            <span class="lbl">Name</span>
+                            <div class="val <?php echo empty($member['ref2_name']) ? 'empty' : ''; ?>"><?php echo pv($member['ref2_name'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Contact Number</span>
+                            <div class="val <?php echo empty($member['ref2_contact']) ? 'empty' : ''; ?>"><?php echo pv($member['ref2_contact'] ?? ''); ?></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VII -->
+        <div class="section">
+            <div class="section-head">
+                <span class="num-badge">VII</span>
+                <h2>Beneficiary Information</h2>
+            </div>
+            <div class="section-body">
+                <div class="fields">
+                    <div class="field">
+                        <span class="lbl">Full Name</span>
+                        <div class="val <?php echo empty($member['beneficiary_name']) ? 'empty' : ''; ?>"><?php echo pv($member['beneficiary_name'] ?? 'Not set'); ?></div>
+                    </div>
+                    <div class="field-row two">
+                        <div class="field">
+                            <span class="lbl">Relationship</span>
+                            <div class="val <?php echo empty($member['beneficiary_relation']) ? 'empty' : ''; ?>"><?php echo pv($member['beneficiary_relation'] ?? ''); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Age</span>
+                            <div class="val <?php echo empty($member['beneficiary_age']) ? 'empty' : ''; ?>"><?php echo pv($member['beneficiary_age'] ?? ''); ?></div>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <span class="lbl">Address</span>
+                        <div class="val <?php echo empty($member['beneficiary_address']) ? 'empty' : ''; ?>"><?php echo pv($member['beneficiary_address'] ?? ''); ?></div>
+                    </div>
+                    <div class="field">
+                        <span class="lbl">Contact Number</span>
+                        <div class="val <?php echo empty($member['beneficiary_contact']) ? 'empty' : ''; ?>"><?php echo pv($member['beneficiary_contact'] ?? ''); ?></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- VIII -->
+        <div class="section">
+            <div class="section-head">
+                <span class="num-badge">VIII</span>
+                <h2>Chapter Information</h2>
+            </div>
+            <div class="section-body">
+                <div class="fields">
+                    <div class="field-row two">
+                        <div class="field">
+                            <span class="lbl">Chapter</span>
+                            <div class="val <?php echo empty($member['chapter']) ? 'empty' : ''; ?>"><?php echo pv($member['chapter'] ?? 'Not assigned'); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Group</span>
+                            <div class="val <?php echo empty($member['group_name']) ? 'empty' : ''; ?>"><?php echo pv($member['group_name'] ?? 'Not assigned'); ?></div>
+                        </div>
+                    </div>
+                    <div class="field-row two">
+                        <div class="field">
+                            <span class="lbl">Leader</span>
+                            <div class="val <?php echo empty($member['leader']) ? 'empty' : ''; ?>"><?php echo pv($member['leader'] ?? 'Not assigned'); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Coordinator</span>
+                            <div class="val <?php echo empty($member['coordinator']) ? 'empty' : ''; ?>"><?php echo pv($member['coordinator'] ?? 'Not assigned'); ?></div>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <span class="lbl">Chairman</span>
+                        <div class="val <?php echo empty($member['chairman']) ? 'empty' : ''; ?>"><?php echo pv($member['chairman'] ?? 'Not assigned'); ?></div>
+                    </div>
+                    <div class="field-row two">
+                        <div class="field">
+                            <span class="lbl">Screening Officer</span>
+                            <div class="val <?php echo empty($member['screening_officer']) ? 'empty' : ''; ?>"><?php echo pv($member['screening_officer'] ?? 'Not assigned'); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Screening Date</span>
+                            <div class="val <?php echo empty($member['screening_date']) ? 'empty' : ''; ?>"><?php echo !empty($member['screening_date']) ? date('F j, Y', strtotime($member['screening_date'])) : 'Not set'; ?></div>
+                        </div>
+                    </div>
+                    <div class="field-row two">
+                        <div class="field">
+                            <span class="lbl">Approved By</span>
+                            <div class="val <?php echo empty($member['approved_by']) ? 'empty' : ''; ?>"><?php echo pv($member['approved_by'] ?? 'Not assigned'); ?></div>
+                        </div>
+                        <div class="field">
+                            <span class="lbl">Date Registered</span>
+                            <div class="val <?php echo empty($member['date_registered']) ? 'empty' : ''; ?>"><?php echo !empty($member['date_registered']) ? date('F j, Y', strtotime($member['date_registered'])) : 'Not set'; ?></div>
+                        </div>
+                    </div>
+                    <div class="field">
+                        <span class="lbl">Membership Status</span>
+                        <div class="val"><span class="chip <?php echo $status_class; ?>"><?php echo ucfirst($status); ?></span></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- IX -->
+        <div class="section">
+            <div class="section-head">
+                <span class="num-badge">IX</span>
+                <h2>Account Information</h2>
+            </div>
+            <div class="section-body">
+                <div class="fields">
+                    <div class="field">
+                        <span class="lbl">Username</span>
+                        <div class="val"><?php echo pv($member['username'] ?? 'Not set'); ?></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Actions -->
+        <div class="actions">
+            <button type="submit" class="btn-primary">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
+                Save changes
+            </button>
+            <button type="button" class="btn-secondary" id="printBtn">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/></svg>
+                Print / Export PDF
+            </button>
+        </div>
+    </form>
+
+</main>
+
+<!-- Bottom Nav (5 Tabs) -->
+<nav class="bottom-nav">
+    <a href="dashboard.php" class="nav-item">
+        <span class="icon">🏠</span>
+        <span>Home</span>
+    </a>
+    <a href="notifications.php" class="nav-item">
+        <span class="icon">🔔</span>
+        <span>Notify</span>
+    </a>
+    <a href="payments.php" class="nav-item">
+        <span class="icon">💳</span>
+        <span>Payments</span>
+    </a>
+    <a href="profile.php" class="nav-item active">
+        <span class="icon">👤</span>
+        <span>Profile</span>
+    </a>
+    <a href="support.php" class="nav-item">
+        <span class="icon">❓</span>
+        <span>Help</span>
+    </a>
+</nav>
+
+<script>
+// Drawer Logic
+(function(){
+    const openBtn = document.getElementById('openDrawer');
+    const closeBtn = document.getElementById('closeDrawer');
+    const drawer = document.getElementById('sideDrawer');
+    const overlay = document.getElementById('drawerOverlay');
+
+    function openDrawer() {
+        drawer.classList.add('open');
+        overlay.classList.add('open');
+    }
+
+    function closeDrawer() {
+        drawer.classList.remove('open');
+        overlay.classList.remove('open');
+    }
+
+    openBtn.addEventListener('click', openDrawer);
+    closeBtn.addEventListener('click', closeDrawer);
+    overlay.addEventListener('click', closeDrawer);
+})();
+
+// Profile Photo Upload Logic
+(function(){
+    const uploadBtn      = document.getElementById('uploadPhotoBtn');
+    const photoInput     = document.getElementById('photoInput');
+    const photoContainer = document.getElementById('profilePhotoContainer');
+    const progressWrap   = document.getElementById('uploadProgress');
+    const progressFill   = progressWrap.querySelector('.bar-fill');
+
+    if (!uploadBtn || !photoInput) return;
+    uploadBtn.addEventListener('click', () => photoInput.click());
+
+    photoInput.addEventListener('change', function(){
+        const file = this.files[0];
+        if (!file) return;
+
+        const validTypes = ['image/jpeg','image/png','image/gif','image/webp'];
+        if (!validTypes.includes(file.type)) {
+            alert('Invalid file type. Please select a JPG, PNG, GIF, or WEBP image.');
+            this.value = '';
+            return;
+        }
+        if (file.size > 5 * 1024 * 1024) {
+            alert('File size must be less than 5MB.');
+            this.value = '';
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = e => {
+            photoContainer.innerHTML = `<img src="${e.target.result}" alt="Profile photo">`;
+        };
+        reader.readAsDataURL(file);
+
+        const fd = new FormData();
+        fd.append('csrf_token', '<?php echo $csrf_token; ?>');
+        fd.append('photo', file);
+
+        progressWrap.classList.add('show');
+        let pct = 0;
+        const tick = setInterval(() => {
+            pct = Math.min(95, pct + 10);
+            progressFill.style.width = pct + '%';
+        }, 100);
+
+        fetch('upload_member_photo.php', { method: 'POST', body: fd, credentials: 'same-origin' })
+        .then(r => r.json())
+        .then(data => {
+            clearInterval(tick);
+            progressFill.style.width = '100%';
+            setTimeout(() => {
+                progressWrap.classList.remove('show');
+                if (data.success) {
+                    const a = document.createElement('div');
+                    a.className = 'alert alert-success';
+                    a.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><span>' + (data.message || 'Photo submitted. Awaiting approval.') + '</span>';
+                    document.querySelector('.main').insertBefore(a, document.querySelector('.main').children[0]);
+                    setTimeout(() => location.reload(), 1800);
+                } else {
+                    alert(data.message || 'Upload failed.');
                     location.reload();
                 }
-            });
+            }, 400);
+        })
+        .catch(err => {
+            clearInterval(tick);
+            progressWrap.classList.remove('show');
+            alert('Upload error: ' + err.message);
+            location.reload();
         });
-        
-        // Print / Export PDF Function
-        document.getElementById('printBtn').addEventListener('click', function() {
-            window.print();
-        });
-        
-        // Auto-dismiss alerts after 5 seconds
-        setTimeout(function() {
-            document.querySelectorAll('.alert').forEach(function(alert) {
-                const bsAlert = new bootstrap.Alert(alert);
-                bsAlert.close();
-            });
-        }, 5000);
-    </script>
+    });
+})();
+
+document.getElementById('printBtn').addEventListener('click', () => window.print());
+</script>
+
 </body>
 </html>

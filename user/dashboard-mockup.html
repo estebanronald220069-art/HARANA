@@ -1,0 +1,1505 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=2.0, user-scalable=yes">
+<title>Dashboard Mockup — NHGL</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   DESIGN TOKENS — Senior-friendly
+   Base font 18px. Tap targets >= 48px. WCAG AA contrast.
+   Navy + Yellow brand retained from current design.
+============================================================ */
+:root {
+    --brand-900: #1e3a5a;
+    --brand-800: #162d47;
+    --brand-700: #234c76;
+    --brand-600: #2d5f92;
+    --brand-500: #3d7ab8;
+    --brand-100: #e8f0f8;
+    --brand-50:  #f4f8fc;
+
+    --yellow-accent: #fbbf24;
+    --yellow-dark:   #b45309; /* darker for text-on-white */
+    --yellow-100:    #fef3c7;
+
+    --success-700: #14532d;
+    --success-500: #16a34a;
+    --success-100: #dcfce7;
+
+    --danger-700: #7f1d1d;
+    --danger-500: #dc2626;
+    --danger-100: #fee2e2;
+
+    --warning-700: #78350f;
+    --warning-500: #d97706;
+    --warning-100: #fef3c7;
+
+    --ink-900: #1e2b3c;
+    --ink-700: #334155;
+    --ink-500: #64748b;
+    --ink-400: #94a3b8;
+    --ink-300: #cbd5e1;
+
+    --line:      #e2e8f0;
+    --line-soft: #eef2f7;
+    --paper:     #f4f7fc;
+    --surface:   #ffffff;
+
+    --radius-sm: 10px;
+    --radius:    14px;
+    --radius-lg: 18px;
+
+    --shadow-sm: 0 2px 8px rgba(16,24,40,0.07);
+    --shadow-md: 0 4px 14px rgba(16,24,40,0.08);
+    --shadow-lg: 0 10px 26px rgba(16,24,40,0.10);
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 18px; }
+
+body {
+    background: var(--paper);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 1rem;
+    line-height: 1.6;
+    color: var(--ink-900);
+    margin: 0;
+    padding: 0;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ============================================================
+   MOCKUP CHROME — state switcher (dev only, not part of product)
+============================================================ */
+.mock-bar {
+    background: #0f172a;
+    color: #fff;
+    padding: 0.9rem 1rem;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    font-size: 0.85rem;
+}
+.mock-bar strong { margin-right: 8px; opacity: 0.7; font-weight: 600; }
+.mock-bar button {
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+    color: #fff;
+    padding: 8px 16px;
+    border-radius: 100px;
+    font-weight: 600;
+    font-size: 0.85rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    font-family: inherit;
+}
+.mock-bar button:hover { background: rgba(255,255,255,0.2); }
+.mock-bar button.active { background: var(--yellow-accent); color: var(--brand-900); border-color: var(--yellow-accent); }
+.mock-bar .note {
+    font-size: 0.72rem;
+    color: rgba(255,255,255,0.6);
+    margin-left: 12px;
+    width: 100%;
+    text-align: center;
+    font-weight: 400;
+}
+
+/* ============================================================
+   APP HEADER — simple, no sidebar (senior-friendly)
+   The mockup drops the sidebar entirely. Navigation is 3 tabs
+   at the bottom on mobile, top on desktop.
+============================================================ */
+.app-header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    padding: 1rem 1.25rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    position: sticky;
+    top: 56px; /* below mock bar */
+    z-index: 50;
+    box-shadow: var(--shadow-sm);
+}
+
+.app-brand {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-width: 0;
+}
+
+.app-brand .logo {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    background: var(--brand-900);
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 900;
+    font-size: 1rem;
+    flex-shrink: 0;
+}
+
+.app-brand .brand-text {
+    display: flex;
+    flex-direction: column;
+    line-height: 1.2;
+    min-width: 0;
+}
+
+.app-brand .brand-name {
+    font-weight: 800;
+    font-size: 1.05rem;
+    color: var(--ink-900);
+}
+
+.app-brand .brand-sub {
+    font-size: 0.75rem;
+    color: var(--ink-500);
+    font-weight: 500;
+}
+
+.header-actions {
+    display: flex;
+    gap: 8px;
+    flex-shrink: 0;
+}
+
+.icon-btn {
+    width: 48px;
+    height: 48px;
+    border-radius: 10px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    color: var(--ink-700);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    cursor: pointer;
+    transition: all 0.15s;
+    text-decoration: none;
+    font-family: inherit;
+}
+
+.icon-btn:hover { background: var(--brand-50); border-color: var(--brand-500); color: var(--brand-700); }
+
+/* ============================================================
+   MAIN CONTENT
+============================================================ */
+.main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 1.25rem 1rem 6rem; /* bottom padding for mobile nav */
+}
+
+.greeting {
+    margin: 0 0 1rem;
+    padding: 0 4px;
+}
+
+.greeting h1 {
+    font-size: 1.5rem;
+    font-weight: 800;
+    color: var(--ink-900);
+    margin: 0 0 4px;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+}
+
+.greeting p {
+    margin: 0;
+    color: var(--ink-500);
+    font-size: 0.95rem;
+    font-weight: 500;
+}
+
+/* ============================================================
+   HERO CARD — the one primary action
+   Three states: pay / paid / overdue
+============================================================ */
+.hero {
+    border-radius: var(--radius-lg);
+    padding: 1.5rem 1.4rem;
+    margin-bottom: 1rem;
+    position: relative;
+    overflow: hidden;
+    box-shadow: var(--shadow-lg);
+}
+
+.hero.hero-pay {
+    background: linear-gradient(135deg, var(--brand-800) 0%, var(--brand-600) 100%);
+    color: #fff;
+}
+
+.hero.hero-paid {
+    background: linear-gradient(135deg, #14532d 0%, #15803d 100%);
+    color: #fff;
+}
+
+.hero.hero-overdue {
+    background: linear-gradient(135deg, #7f1d1d 0%, #991b1b 100%);
+    color: #fff;
+}
+
+.hero::before {
+    content: '';
+    position: absolute;
+    top: -80px;
+    right: -80px;
+    width: 260px;
+    height: 260px;
+    background: radial-gradient(circle, rgba(255,255,255,0.14) 0%, transparent 70%);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.hero-content { position: relative; z-index: 2; }
+
+.hero-label {
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 800;
+    opacity: 0.85;
+    margin-bottom: 0.4rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.hero-amount {
+    font-size: 2.6rem;
+    font-weight: 900;
+    line-height: 1;
+    letter-spacing: -0.03em;
+    margin-bottom: 0.4rem;
+}
+
+.hero-amount .cur {
+    font-size: 1.6rem;
+    font-weight: 700;
+    opacity: 0.85;
+    margin-right: 4px;
+    vertical-align: 8px;
+}
+
+.hero-detail {
+    font-size: 1rem;
+    font-weight: 500;
+    opacity: 0.95;
+    margin-bottom: 1.1rem;
+    line-height: 1.5;
+}
+
+.hero-detail strong { font-weight: 800; }
+
+.hero-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.btn-primary {
+    background: var(--yellow-accent);
+    color: var(--brand-900);
+    border: none;
+    padding: 1rem 1.5rem;
+    border-radius: var(--radius);
+    font-size: 1.05rem;
+    font-weight: 800;
+    font-family: inherit;
+    cursor: pointer;
+    transition: all 0.18s;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    box-shadow: 0 4px 14px rgba(251,191,36,0.35);
+    letter-spacing: 0.01em;
+    min-height: 56px;
+}
+
+.btn-primary:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(251,191,36,0.5);
+}
+
+.btn-primary:active { transform: translateY(0); }
+
+.btn-secondary-light {
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+    border: 1.5px solid rgba(255,255,255,0.35);
+    padding: 1rem 1.5rem;
+    border-radius: var(--radius);
+    font-size: 1rem;
+    font-weight: 700;
+    font-family: inherit;
+    cursor: pointer;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    transition: all 0.18s;
+    min-height: 56px;
+}
+
+.btn-secondary-light:hover {
+    background: rgba(255,255,255,0.25);
+    border-color: rgba(255,255,255,0.6);
+}
+
+/* ============================================================
+   SECTION
+============================================================ */
+.section {
+    margin-bottom: 1rem;
+}
+
+.section-title {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 800;
+    color: var(--ink-500);
+    margin: 0 0 0.6rem;
+    padding: 0 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.section-title::before {
+    content: '';
+    display: inline-block;
+    width: 4px;
+    height: 14px;
+    background: var(--yellow-accent);
+    border-radius: 2px;
+}
+
+/* ============================================================
+   STATS GRID — 2x2 on mobile, 4x1 on desktop
+============================================================ */
+.stats-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    margin-bottom: 1rem;
+}
+
+.stat-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 1rem;
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-height: 100px;
+    justify-content: center;
+}
+
+.stat-card .stat-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-weight: 700;
+    color: var(--ink-500);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.stat-card .stat-value {
+    font-size: 1.5rem;
+    font-weight: 900;
+    color: var(--ink-900);
+    line-height: 1.1;
+    letter-spacing: -0.02em;
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    flex-wrap: wrap;
+}
+
+.stat-card .stat-value small {
+    font-size: 0.85rem;
+    font-weight: 600;
+    color: var(--ink-500);
+    letter-spacing: 0;
+}
+
+.stat-card .stat-hint {
+    font-size: 0.78rem;
+    color: var(--ink-500);
+    font-weight: 500;
+    margin-top: 2px;
+    line-height: 1.3;
+}
+
+/* progress bar inside a stat */
+.stat-progress {
+    height: 8px;
+    background: var(--line-soft);
+    border-radius: 100px;
+    overflow: hidden;
+    margin-top: 8px;
+}
+
+.stat-progress .fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--success-500), #22c55e);
+    border-radius: 100px;
+    transition: width 0.6s ease;
+}
+
+/* ============================================================
+   BENEFIT CARD — expandable
+============================================================ */
+.benefit-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+
+.benefit-head {
+    background: linear-gradient(135deg, #1e2f45 0%, #2c4a6b 100%);
+    color: #fff;
+    padding: 1.25rem 1.4rem;
+    position: relative;
+    overflow: hidden;
+}
+
+.benefit-head::before {
+    content: '';
+    position: absolute;
+    top: -60px;
+    right: -60px;
+    width: 180px;
+    height: 180px;
+    background: radial-gradient(circle at top right, rgba(251,191,36,0.22) 0%, transparent 65%);
+    pointer-events: none;
+}
+
+.benefit-head .ttl {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    font-weight: 800;
+    color: rgba(255,255,255,0.8);
+    margin-bottom: 6px;
+    position: relative;
+}
+
+.benefit-head .amt {
+    font-size: 2.1rem;
+    font-weight: 900;
+    color: var(--yellow-accent);
+    line-height: 1;
+    letter-spacing: -0.02em;
+    position: relative;
+}
+
+.benefit-head .amt .cur {
+    font-size: 1.35rem;
+    opacity: 0.9;
+    margin-right: 3px;
+    vertical-align: 6px;
+}
+
+.benefit-head .sub {
+    font-size: 0.9rem;
+    color: rgba(255,255,255,0.82);
+    margin-top: 8px;
+    line-height: 1.5;
+    position: relative;
+}
+
+.benefit-head .sub strong {
+    color: #fff;
+    font-weight: 700;
+}
+
+.benefit-toggle {
+    width: 100%;
+    background: var(--surface);
+    border: none;
+    border-top: 1px solid var(--line-soft);
+    padding: 1rem 1.4rem;
+    font-size: 0.92rem;
+    font-weight: 700;
+    font-family: inherit;
+    color: var(--brand-600);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    min-height: 52px;
+    transition: background 0.15s;
+}
+
+.benefit-toggle:hover { background: var(--brand-50); }
+
+.benefit-toggle .chev {
+    transition: transform 0.2s;
+    font-size: 0.9rem;
+    color: var(--ink-400);
+}
+
+.benefit-toggle.open .chev { transform: rotate(180deg); }
+
+.benefit-body {
+    display: none;
+    padding: 0.5rem 1.4rem 1.25rem;
+    background: var(--brand-50);
+    border-top: 1px solid var(--line-soft);
+}
+
+.benefit-body.open { display: block; }
+
+.benefit-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 0.7rem 0;
+    font-size: 0.95rem;
+    border-bottom: 1px dashed var(--line);
+}
+
+.benefit-row:last-child { border-bottom: none; }
+
+.benefit-row .label {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.3;
+}
+
+.benefit-row .label .main {
+    font-weight: 600;
+    color: var(--ink-900);
+}
+
+.benefit-row .label .sub {
+    font-size: 0.78rem;
+    color: var(--ink-500);
+    font-weight: 500;
+    margin-top: 2px;
+}
+
+.benefit-row .amt {
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    color: var(--ink-900);
+}
+
+.benefit-row .amt.pos { color: var(--success-700); }
+.benefit-row .amt.neg { color: var(--danger-700); }
+.benefit-row .amt.dim { color: var(--ink-400); }
+
+.benefit-total {
+    border-top: 2px solid var(--brand-500);
+    padding-top: 0.9rem;
+    margin-top: 0.4rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.benefit-total .lbl {
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 800;
+    color: var(--ink-700);
+}
+
+.benefit-total .val {
+    font-size: 1.35rem;
+    font-weight: 900;
+    color: var(--brand-700);
+    letter-spacing: -0.02em;
+}
+
+.benefit-note {
+    font-size: 0.82rem;
+    color: var(--ink-500);
+    margin-top: 0.7rem;
+    line-height: 1.5;
+    padding: 0.7rem 0.9rem;
+    background: #fff;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--line);
+}
+
+/* ============================================================
+   PENDING PAYMENT ALERT — surfaces GCash uploads awaiting admin
+============================================================ */
+.pending-card {
+    background: var(--warning-100);
+    border: 2px solid #fcd34d;
+    border-radius: var(--radius);
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+    display: flex;
+    gap: 14px;
+    align-items: flex-start;
+}
+
+.pending-card .icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    background: #fff;
+    color: var(--warning-700);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    flex-shrink: 0;
+    font-weight: 900;
+}
+
+.pending-card .body {
+    flex: 1;
+    min-width: 0;
+}
+
+.pending-card .title {
+    font-weight: 800;
+    color: var(--warning-700);
+    font-size: 1rem;
+    margin-bottom: 4px;
+}
+
+.pending-card .desc {
+    color: #78350f;
+    font-size: 0.9rem;
+    line-height: 1.5;
+}
+
+.pending-card .ref {
+    display: inline-block;
+    margin-top: 6px;
+    font-family: 'Courier New', monospace;
+    font-size: 0.85rem;
+    background: #fff;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-weight: 700;
+    color: var(--warning-700);
+}
+
+/* ============================================================
+   PAYMENTS LIST — last 3
+============================================================ */
+.payments-list {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: var(--shadow-sm);
+}
+
+.payment-item {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 1rem 1.25rem;
+    border-bottom: 1px solid var(--line-soft);
+    text-decoration: none;
+    color: inherit;
+    transition: background 0.15s;
+}
+
+.payment-item:last-child { border-bottom: none; }
+.payment-item:hover { background: var(--brand-50); }
+
+.payment-icon {
+    width: 44px;
+    height: 44px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.1rem;
+    flex-shrink: 0;
+    font-weight: 900;
+}
+
+.payment-icon.cash  { background: var(--success-100); color: var(--success-700); }
+.payment-icon.gcash { background: #dbeafe;            color: #1e40af; }
+.payment-icon.bank  { background: var(--yellow-100);  color: var(--yellow-dark); }
+
+.payment-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.payment-title {
+    font-weight: 700;
+    color: var(--ink-900);
+    font-size: 0.95rem;
+    line-height: 1.3;
+    margin-bottom: 2px;
+}
+
+.payment-meta {
+    font-size: 0.82rem;
+    color: var(--ink-500);
+    font-weight: 500;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-items: center;
+}
+
+.payment-amt {
+    font-weight: 900;
+    color: var(--ink-900);
+    font-size: 1.05rem;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+
+.payment-list-footer {
+    padding: 0.9rem 1.25rem;
+    background: var(--paper);
+    border-top: 1px solid var(--line-soft);
+    text-align: center;
+}
+
+.btn-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--brand-600);
+    font-weight: 700;
+    font-size: 0.92rem;
+    text-decoration: none;
+    padding: 8px 12px;
+    border-radius: var(--radius-sm);
+    transition: background 0.15s;
+    font-family: inherit;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    min-height: 44px;
+}
+
+.btn-link:hover { background: var(--brand-100); }
+
+/* ============================================================
+   MOBILE BOTTOM NAV
+============================================================ */
+.bottom-nav {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: var(--surface);
+    border-top: 1px solid var(--line);
+    display: flex;
+    z-index: 60;
+    box-shadow: 0 -4px 14px rgba(16,24,40,0.06);
+}
+
+.bottom-nav .nav-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 10px 4px 12px;
+    text-decoration: none;
+    color: var(--ink-500);
+    font-size: 0.72rem;
+    font-weight: 600;
+    transition: color 0.15s;
+    min-height: 64px;
+}
+
+.bottom-nav .nav-item.active { color: var(--brand-700); }
+
+.bottom-nav .nav-item .icon {
+    font-size: 1.35rem;
+    line-height: 1;
+    font-weight: 900;
+}
+
+/* ============================================================
+   STATE VISIBILITY — dev tool
+============================================================ */
+.state { display: none; }
+.state.active { display: block; }
+
+/* ============================================================
+   RESPONSIVE
+============================================================ */
+@media (min-width: 700px) {
+    .stats-grid {
+        grid-template-columns: repeat(4, 1fr);
+    }
+    .hero-actions {
+        flex-direction: row;
+    }
+    .hero-actions > * { flex: 1; }
+    .main {
+        padding-bottom: 2rem;
+    }
+    .bottom-nav {
+        position: static;
+        max-width: 720px;
+        margin: 0 auto 2rem;
+        border-radius: var(--radius);
+        border: 1px solid var(--line);
+        box-shadow: var(--shadow-sm);
+    }
+}
+
+@media (max-width: 380px) {
+    html { font-size: 17px; }
+    .hero-amount { font-size: 2.2rem; }
+    .benefit-head .amt { font-size: 1.8rem; }
+    .stat-card .stat-value { font-size: 1.3rem; }
+}
+</style>
+</head>
+<body>
+
+<!-- ============================================================
+     MOCKUP CHROME — Dev only. Not part of the real product.
+     Remove this entire .mock-bar block when integrating PHP.
+============================================================ -->
+<div class="mock-bar">
+    <strong>MOCKUP:</strong>
+    <button data-state="A" class="active">A — Bernadette (paid ahead)</button>
+    <button data-state="B">B — Joron (overdue)</button>
+    <button data-state="C">C — Ronald (paid + advance)</button>
+    <span class="note">Dev switcher — not visible to end-users. Drag the window narrow to see the mobile layout.</span>
+</div>
+
+<!-- App header -->
+<header class="app-header">
+    <div class="app-brand">
+        <div class="logo">NH</div>
+        <div class="brand-text">
+            <span class="brand-name">NHGL</span>
+            <span class="brand-sub">Nagkaisang Haranista</span>
+        </div>
+    </div>
+    <div class="header-actions">
+        <a href="#" class="icon-btn" aria-label="Notifications" title="Notifications">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/></svg>
+        </a>
+        <a href="#" class="icon-btn" aria-label="Profile" title="Profile">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        </a>
+    </div>
+</header>
+
+<main class="main">
+
+<!-- ================================================================
+     STATE A — Bernadette Dizon (20264435)
+     Member since 2024-02-28, monthly 100, active.
+     Data from SQL:
+       Confirmed payments sum: 900 (1 GCash 700 + 2 cash 100+100)
+       Months elapsed since join (Feb 2024 → Oct 2026): ~32 months
+       BUT for benefit: computeContributionYears = 2 → base = 90,000
+       No missed months visible in payments for her period → good payer
+       Balance: paid 900 vs owed ≈ 32 * 100 = 3200 → actually owes money!
+
+     WAIT — she does NOT actually have credit. member_balances
+     said -800 (credit) but that was the stale cache bug (Bug 2).
+     The TRUE sum of her confirmed payments is 900, while months
+     since Feb 2024 is ~32. So she OWES money, not has credit.
+
+     Re-evaluating: for the mockup, I'll show her as OVERDUE (case B)
+     and use Joron as the "paid" state instead. Let me verify Joron.
+
+     Joron (20263983): 9 payments of 100 = 900 confirmed.
+     Joined 2026-02-28. Months Feb→Oct = 9 months.
+     So 900 paid = 900 owed = FULLY PAID. Good candidate for "paid" state.
+
+     Ronald (20262319): 1000 paid. Joined 2026-03-28. Mar→Oct = 8 months.
+     800 owed vs 1000 paid = 200 in advance. Great "advance" case.
+
+     Bernadette (20264435): 900 paid, joined 2024-02-28, 32 months elapsed.
+     That means she owes 3200 - 900 = 2300. She's DEEPLY OVERDUE.
+     Perfect for "overdue" state.
+
+     Let me swap:
+       A = Joron (fully paid, current)
+       B = Bernadette (deeply overdue)
+       C = Ronald (paid + advance)
+================================================================ -->
+
+<!-- STATE A — Joron: fully paid, no misses, no advance -->
+<section class="state active" data-state="A">
+
+    <div class="greeting">
+        <h1>Hello, Joron</h1>
+        <p>Member for 8 months · Since February 2026</p>
+    </div>
+
+    <!-- HERO: Paid up -->
+    <div class="hero hero-paid">
+        <div class="hero-content">
+            <div class="hero-label">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                You're all paid up
+            </div>
+            <div class="hero-amount">₱0.00</div>
+            <div class="hero-detail">
+                Your next payment of <strong>₱100.00</strong> is due <strong>November 15, 2026</strong>.
+            </div>
+            <div class="hero-actions">
+                <a href="#" class="btn-secondary-light">
+                    Pay ₱100 in advance
+                </a>
+                <a href="#" class="btn-secondary-light">
+                    View payment history
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- STATS: 4 key numbers -->
+    <section class="section">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total paid</div>
+                <div class="stat-value">₱900</div>
+                <div class="stat-hint">9 months × ₱100</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Months paid</div>
+                <div class="stat-value">9<small>of 9</small></div>
+                <div class="stat-progress"><div class="fill" style="width: 100%;"></div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Next due</div>
+                <div class="stat-value" style="font-size: 1.15rem;">Nov 15</div>
+                <div class="stat-hint">₱100.00 monthly</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Missing</div>
+                <div class="stat-value" style="color: var(--success-700);">0</div>
+                <div class="stat-hint">On-time payer ✓</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- BENEFIT: expandable -->
+    <section class="section">
+        <h2 class="section-title">Your benefit</h2>
+
+        <div class="benefit-card">
+            <div class="benefit-head">
+                <div class="ttl">Estimated payout to your family</div>
+                <div class="amt"><span class="cur">₱</span>80,000</div>
+                <div class="sub">
+                    Based on <strong>under 1 year</strong> of membership.
+                    This grows as you stay a member.
+                </div>
+            </div>
+
+            <button class="benefit-toggle" type="button" onclick="toggleBenefit(this)">
+                <span>See how this is calculated</span>
+                <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+
+            <div class="benefit-body">
+                <div class="benefit-row">
+                    <span class="label">
+                        <span class="main">Base benefit</span>
+                        <span class="sub">1–2 years of membership</span>
+                    </span>
+                    <span class="amt">₱80,000</span>
+                </div>
+                <div class="benefit-row">
+                    <span class="label">
+                        <span class="main">Good payer bonus</span>
+                        <span class="sub">Requires 5+ years clean record</span>
+                    </span>
+                    <span class="amt dim">—</span>
+                </div>
+                <div class="benefit-row">
+                    <span class="label">
+                        <span class="main">Missed payment deduction</span>
+                        <span class="sub">0 missed payments</span>
+                    </span>
+                    <span class="amt pos">₱0</span>
+                </div>
+                <div class="benefit-total">
+                    <span class="lbl">Total benefit</span>
+                    <span class="val">₱80,000</span>
+                </div>
+                <div class="benefit-note">
+                    <strong>+ ₱10,000</strong> if death is caused by an accident.<br>
+                    Maximum possible: <strong>₱90,000</strong>.
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- LAST 3 PAYMENTS -->
+    <section class="section">
+        <h2 class="section-title">Recent payments</h2>
+        <div class="payments-list">
+            <a href="#" class="payment-item">
+                <div class="payment-icon cash">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div class="payment-body">
+                    <div class="payment-title">October 2026</div>
+                    <div class="payment-meta">
+                        <span>Cash · collected by leader</span>
+                        <span>·</span>
+                        <span>Oct 14, 2026</span>
+                    </div>
+                </div>
+                <div class="payment-amt">₱100</div>
+            </a>
+            <a href="#" class="payment-item">
+                <div class="payment-icon cash">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div class="payment-body">
+                    <div class="payment-title">September 2026</div>
+                    <div class="payment-meta">
+                        <span>Cash · collected by leader</span>
+                        <span>·</span>
+                        <span>Oct 14, 2026</span>
+                    </div>
+                </div>
+                <div class="payment-amt">₱100</div>
+            </a>
+            <a href="#" class="payment-item">
+                <div class="payment-icon cash">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div class="payment-body">
+                    <div class="payment-title">August 2026</div>
+                    <div class="payment-meta">
+                        <span>Cash · collected by leader</span>
+                        <span>·</span>
+                        <span>Oct 14, 2026</span>
+                    </div>
+                </div>
+                <div class="payment-amt">₱100</div>
+            </a>
+            <div class="payment-list-footer">
+                <a href="#" class="btn-link">See all payments →</a>
+            </div>
+        </div>
+    </section>
+
+</section>
+
+<!-- STATE B — Bernadette: deeply overdue (stale cache hid this!) -->
+<section class="state" data-state="B">
+
+    <div class="greeting">
+        <h1>Hello, Bernadette</h1>
+        <p>Member for 2 years · Since February 2024</p>
+    </div>
+
+    <!-- PENDING PAYMENT alert (if she uploaded one) -->
+    <div class="pending-card">
+        <div class="icon">…</div>
+        <div class="body">
+            <div class="title">A GCash payment is waiting for confirmation</div>
+            <div class="desc">
+                We received your GCash payment of ₱100 on Oct 14, 2026.
+                The office will confirm it within 1–2 business days.
+            </div>
+            <span class="ref">Ref: 725892664</span>
+        </div>
+    </div>
+
+    <!-- HERO: Overdue -->
+    <div class="hero hero-overdue">
+        <div class="hero-content">
+            <div class="hero-label">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
+                Payment overdue
+            </div>
+            <div class="hero-amount"><span class="cur">₱</span>2,300.00</div>
+            <div class="hero-detail">
+                You have <strong>23 unpaid months</strong>.
+                Please visit the office to settle this. Late payments
+                require personal appearance.
+            </div>
+            <div class="hero-actions">
+                <a href="#" class="btn-secondary-light">
+                    Call the office
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- STATS -->
+    <section class="section">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total paid</div>
+                <div class="stat-value">₱900</div>
+                <div class="stat-hint">9 months paid</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Months paid</div>
+                <div class="stat-value" style="color: var(--danger-700);">9<small>of 32</small></div>
+                <div class="stat-progress"><div class="fill" style="width: 28%; background: linear-gradient(90deg, var(--danger-500), #ef4444);"></div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Next due</div>
+                <div class="stat-value" style="font-size: 1.15rem; color: var(--danger-700);">Overdue</div>
+                <div class="stat-hint">Since Nov 2024</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Missing</div>
+                <div class="stat-value" style="color: var(--danger-700);">23</div>
+                <div class="stat-hint">months unpaid</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- BENEFIT: impacted by misses -->
+    <section class="section">
+        <h2 class="section-title">Your benefit</h2>
+        <div class="benefit-card">
+            <div class="benefit-head">
+                <div class="ttl">Estimated payout to your family</div>
+                <div class="amt"><span class="cur">₱</span>85,000</div>
+                <div class="sub">
+                    Base ₱90,000 minus <strong>₱5,000</strong> deduction for missed payments.
+                </div>
+            </div>
+            <button class="benefit-toggle" type="button" onclick="toggleBenefit(this)">
+                <span>See how this is calculated</span>
+                <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="benefit-body">
+                <div class="benefit-row">
+                    <span class="label">
+                        <span class="main">Base benefit</span>
+                        <span class="sub">3–4 years of membership</span>
+                    </span>
+                    <span class="amt">₱90,000</span>
+                </div>
+                <div class="benefit-row">
+                    <span class="label">
+                        <span class="main">Good payer bonus</span>
+                        <span class="sub">Not eligible — has missed payments</span>
+                    </span>
+                    <span class="amt dim">—</span>
+                </div>
+                <div class="benefit-row">
+                    <span class="label">
+                        <span class="main">Missed payment deduction</span>
+                        <span class="sub">11–25 missed payments</span>
+                    </span>
+                    <span class="amt neg">−₱5,000</span>
+                </div>
+                <div class="benefit-total">
+                    <span class="lbl">Total benefit</span>
+                    <span class="val">₱85,000</span>
+                </div>
+                <div class="benefit-note">
+                    <strong>Important:</strong> settling your missed payments restores
+                    the full benefit. Contact the office for a payment plan.
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- LAST 3 PAYMENTS -->
+    <section class="section">
+        <h2 class="section-title">Recent payments</h2>
+        <div class="payments-list">
+            <a href="#" class="payment-item">
+                <div class="payment-icon gcash">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+                </div>
+                <div class="payment-body">
+                    <div class="payment-title">October 2026</div>
+                    <div class="payment-meta">
+                        <span>GCash · Ref: 725892664</span>
+                        <span>·</span>
+                        <span style="color: var(--warning-700); font-weight: 700;">Pending</span>
+                    </div>
+                </div>
+                <div class="payment-amt">₱100</div>
+            </a>
+            <a href="#" class="payment-item">
+                <div class="payment-icon cash">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div class="payment-body">
+                    <div class="payment-title">September 2026</div>
+                    <div class="payment-meta">
+                        <span>Cash · collected by leader</span>
+                        <span>·</span>
+                        <span>Oct 14, 2026</span>
+                    </div>
+                </div>
+                <div class="payment-amt">₱100</div>
+            </a>
+            <a href="#" class="payment-item">
+                <div class="payment-icon cash">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div class="payment-body">
+                    <div class="payment-title">August 2026</div>
+                    <div class="payment-meta">
+                        <span>Cash · collected by leader</span>
+                        <span>·</span>
+                        <span>Oct 14, 2026</span>
+                    </div>
+                </div>
+                <div class="payment-amt">₱100</div>
+            </a>
+            <div class="payment-list-footer">
+                <a href="#" class="btn-link">See all payments →</a>
+            </div>
+        </div>
+    </section>
+
+</section>
+
+<!-- STATE C — Ronald: paid + advance -->
+<section class="state" data-state="C">
+
+    <div class="greeting">
+        <h1>Hello, Ronald</h1>
+        <p>Member for 8 months · Since March 2026</p>
+    </div>
+
+    <!-- HERO: Paid ahead -->
+    <div class="hero hero-paid">
+        <div class="hero-content">
+            <div class="hero-label">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                You're paid ahead
+            </div>
+            <div class="hero-amount">₱300.00</div>
+            <div class="hero-detail">
+                Credit toward future months. You're covered through
+                <strong>December 2026</strong>. Next payment won't be due until <strong>January 15, 2027</strong>.
+            </div>
+            <div class="hero-actions">
+                <a href="#" class="btn-secondary-light">
+                    View payment history
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <!-- STATS -->
+    <section class="section">
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="stat-label">Total paid</div>
+                <div class="stat-value">₱1,000</div>
+                <div class="stat-hint">10 months × ₱100</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Months paid</div>
+                <div class="stat-value">10<small>of 8</small></div>
+                <div class="stat-progress"><div class="fill" style="width: 100%;"></div></div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Paid ahead</div>
+                <div class="stat-value" style="color: var(--success-700);">+₱300</div>
+                <div class="stat-hint">3 months advance</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-label">Next due</div>
+                <div class="stat-value" style="font-size: 1.15rem;">Jan 15</div>
+                <div class="stat-hint">2027</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- BENEFIT -->
+    <section class="section">
+        <h2 class="section-title">Your benefit</h2>
+        <div class="benefit-card">
+            <div class="benefit-head">
+                <div class="ttl">Estimated payout to your family</div>
+                <div class="amt"><span class="cur">₱</span>80,000</div>
+                <div class="sub">
+                    Based on <strong>under 1 year</strong> of membership.
+                </div>
+            </div>
+            <button class="benefit-toggle" type="button" onclick="toggleBenefit(this)">
+                <span>See how this is calculated</span>
+                <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            </button>
+            <div class="benefit-body">
+                <div class="benefit-row">
+                    <span class="label">
+                        <span class="main">Base benefit</span>
+                        <span class="sub">1–2 years of membership</span>
+                    </span>
+                    <span class="amt">₱80,000</span>
+                </div>
+                <div class="benefit-row">
+                    <span class="label">
+                        <span class="main">Good payer bonus</span>
+                        <span class="sub">Requires 5+ years clean record</span>
+                    </span>
+                    <span class="amt dim">—</span>
+                </div>
+                <div class="benefit-row">
+                    <span class="label">
+                        <span class="main">Missed payment deduction</span>
+                        <span class="sub">0 missed payments</span>
+                    </span>
+                    <span class="amt pos">₱0</span>
+                </div>
+                <div class="benefit-total">
+                    <span class="lbl">Total benefit</span>
+                    <span class="val">₱80,000</span>
+                </div>
+                <div class="benefit-note">
+                    <strong>+ ₱10,000</strong> if death is caused by an accident.<br>
+                    Maximum possible: <strong>₱90,000</strong>.
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- LAST 3 -->
+    <section class="section">
+        <h2 class="section-title">Recent payments</h2>
+        <div class="payments-list">
+            <a href="#" class="payment-item">
+                <div class="payment-icon cash">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
+                </div>
+                <div class="payment-body">
+                    <div class="payment-title">October 2026</div>
+                    <div class="payment-meta">
+                        <span>Cash · collected by leader</span>
+                        <span>·</span>
+                        <span>Oct 13, 2026</span>
+                    </div>
+                </div>
+                <div class="payment-amt">₱1,000</div>
+            </a>
+            <a href="#" class="payment-item">
+                <div class="payment-icon gcash">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+                </div>
+                <div class="payment-body">
+                    <div class="payment-title">Batch payment</div>
+                    <div class="payment-meta">
+                        <span>GCash · Ref: 123456</span>
+                        <span>·</span>
+                        <span>Sep 30, 2026</span>
+                    </div>
+                </div>
+                <div class="payment-amt">₱100</div>
+            </a>
+            <a href="#" class="payment-item">
+                <div class="payment-icon gcash">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+                </div>
+                <div class="payment-body">
+                    <div class="payment-title">Batch payment</div>
+                    <div class="payment-meta">
+                        <span>GCash · Ref: 1234656474</span>
+                        <span>·</span>
+                        <span>Sep 29, 2026</span>
+                    </div>
+                </div>
+                <div class="payment-amt">₱100</div>
+            </a>
+            <div class="payment-list-footer">
+                <a href="#" class="btn-link">See all payments →</a>
+            </div>
+        </div>
+    </section>
+
+</section>
+
+</main>
+
+<!-- Mobile bottom nav -->
+<nav class="bottom-nav">
+    <a href="#" class="nav-item active">
+        <span class="icon">🏠</span>
+        <span>Home</span>
+    </a>
+    <a href="#" class="nav-item">
+        <span class="icon">💳</span>
+        <span>Payments</span>
+    </a>
+    <a href="#" class="nav-item">
+        <span class="icon">👤</span>
+        <span>Profile</span>
+    </a>
+    <a href="#" class="nav-item">
+        <span class="icon">❓</span>
+        <span>Help</span>
+    </a>
+</nav>
+
+<script>
+/* ============================================================
+   State switcher (dev only)
+============================================================ */
+document.querySelectorAll('.mock-bar button').forEach(btn => {
+    btn.addEventListener('click', () => {
+        document.querySelectorAll('.mock-bar button').forEach(b => b.classList.remove('active'));
+        document.querySelectorAll('.state').forEach(s => s.classList.remove('active'));
+        btn.classList.add('active');
+        const target = document.querySelector(`.state[data-state="${btn.dataset.state}"]`);
+        if (target) target.classList.add('active');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+});
+
+/* ============================================================
+   Benefit breakdown toggle
+============================================================ */
+function toggleBenefit(btn) {
+    btn.classList.toggle('open');
+    const body = btn.nextElementSibling;
+    if (body) body.classList.toggle('open');
+}
+</script>
+
+</body>
+</html>

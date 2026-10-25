@@ -1,0 +1,1685 @@
+<?php
+// user/dashboard.php — Senior-friendly dashboard
+require_once '../includes/config.php';
+require_once '../includes/db_connection.php';
+require_once '../includes/security.php';
+require_once '../includes/auth.php';
+require_once '../includes/user_functions.php';
+require_once '../includes/benefit_rules.php';
+
+$auth->requireLogin();
+$current_user = $auth->getCurrentUser();
+$db = Database::getInstance();
+
+// ---------- Find member ----------
+$member = getUserMemberData($db, $current_user);
+
+if (!$member && !empty($current_user['user_id'])) {
+    $member = $db->getSingle(
+        "SELECT * FROM members WHERE user_id = ?",
+        [$current_user['user_id']], 'i'
+    );
+}
+if (!$member && !empty($current_user['username'])) {
+    $member = $db->getSingle(
+        "SELECT * FROM members WHERE username = ?",
+        [$current_user['username']], 's'
+    );
+}
+if (!$member || empty($member['member_code'])) {
+    header('Location: ../logout.php?error=member_not_found');
+    exit();
+}
+
+$member_code = $member['member_code'];
+$user_id     = $current_user['user_id'];
+
+// ---------- Rules-based benefit computation ----------
+$summary = BenefitRules::getMemberBenefitSummary($db, $member_code);
+
+$years_as_member   = $summary['years_as_member']    ?? 0;
+$months_as_member  = $summary['months_as_member']   ?? 0;
+$missed_payments   = $summary['missed_payments']    ?? 0;
+$expected_payments = $summary['expected_payments']  ?? 0;
+$paid_payments     = $summary['paid_payments']      ?? 0;
+$is_good_payer     = $summary['is_good_payer']      ?? false;
+$good_payer_bonus  = $summary['good_payer_bonus']   ?? 0;
+$base_benefit      = $summary['base_benefit']       ?? 0;
+$deduction         = $summary['deduction']          ?? 0;
+$deduction_reason  = $summary['deduction_reason']   ?? '';
+$total_benefit     = $summary['total_benefit']      ?? 0;
+$accident_bonus    = $summary['accident_bonus']     ?? 10000;
+$accident_max      = $summary['accident_max_benefit'] ?? 0;
+$probation         = $summary['probation']          ?? ['months'=>0,'label'=>'No probation','class'=>'success'];
+$is_donation       = $summary['is_donation']        ?? false;
+
+// ---------- Financial ----------
+$balance              = getUserBalance($db, $member_code);
+$monthly_contribution = (float)($member['monthly_contribution'] ?? 100);
+$expected_total       = $months_as_member * $monthly_contribution;
+$total_paid           = (float)($balance['total_paid'] ?? 0);
+$current_balance      = $expected_total - $total_paid;
+$progress_pct         = $expected_total > 0
+    ? min(100, round(($total_paid / $expected_total) * 100))
+    : 0;
+
+// ---------- Next due ----------
+$last_payment = $db->getSingle(
+    "SELECT MAX(payment_date) AS last_date FROM payments 
+     WHERE member_id = ? AND payment_status = 'confirmed'",
+    [$member_code], 's'
+);
+$last_payment_date = $last_payment['last_date'] ?? $member['date_joined'] ?? date('Y-m-d');
+$next_due_date     = date('Y-m-d', strtotime($last_payment_date . ' +1 month'));
+
+$today          = new DateTime();
+$next_due_obj   = new DateTime($next_due_date);
+$days_until_due = (int)$today->diff($next_due_obj)->format('%r%a');
+$is_overdue     = $days_until_due < 0;
+$is_due_soon    = $days_until_due >= 0 && $days_until_due <= 7;
+
+// ---------- Tenure text ----------
+$joined_dt = new DateTime($member['date_joined'] ?? 'now');
+$diff      = $joined_dt->diff(new DateTime());
+$tenure_text = '';
+if ($diff->y > 0) $tenure_text .= $diff->y . ' year' . ($diff->y > 1 ? 's' : '');
+if ($diff->m > 0) $tenure_text .= ($tenure_text ? ', ' : '') . $diff->m . ' month' . ($diff->m > 1 ? 's' : '');
+if (!$tenure_text) $tenure_text = 'New member';
+
+$initials = strtoupper(
+    substr($member['first_name'] ?? 'U', 0, 1) .
+    substr($member['last_name']  ?? '', 0, 1)
+);
+
+$is_admin   = ($current_user['role'] === 'admin');
+$csrf_token = Security::generateCSRFToken();
+?>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=2.0, user-scalable=yes">
+<title>Dashboard — <?php echo APP_NAME; ?></title>
+<link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   DESIGN TOKENS — Navy + Yellow (Senior friendly)
+============================================================ */
+:root {
+    --brand-900: #1e3a5a;
+    --brand-800: #162d47;
+    --brand-700: #234c76;
+    --brand-600: #2d5f92;
+    --brand-500: #3d7ab8;
+    --brand-100: #e8f0f8;
+    --brand-50:  #f4f8fc;
+
+    --yellow-accent: #fbbf24;
+    --yellow-dark:   #d97706;
+    --yellow-100:    #fef3c7;
+
+    --success-700: #14532d;
+    --success-500: #16a34a;
+    --success-100: #dcfce7;
+
+    --danger-700: #7f1d1d;
+    --danger-500: #dc2626;
+    --danger-100: #fee2e2;
+
+    --warning-700: #78350f;
+    --warning-500: #d97706;
+    --warning-100: #fef3c7;
+
+    --ink-900: #1e2b3c;
+    --ink-700: #334155;
+    --ink-500: #64748b;
+    --ink-400: #94a3b8;
+    --ink-300: #cbd5e1;
+
+    --line:      #e2e8f0;
+    --line-soft: #eef2f7;
+    --paper:     #f4f7fc;
+    --surface:   #ffffff;
+
+    --radius-sm: 10px;
+    --radius:    14px;
+    --radius-lg: 18px;
+
+    --shadow-xs: 0 1px 3px rgba(16,24,40,0.05);
+    --shadow-sm: 0 2px 8px rgba(16,24,40,0.07);
+    --shadow-md: 0 4px 14px rgba(16,24,40,0.08);
+    --shadow-lg: 0 10px 26px rgba(16,24,40,0.1);
+}
+
+* { box-sizing: border-box; }
+
+html { font-size: 17px; }
+
+body {
+    background: var(--paper);
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    font-size: 1rem;
+    line-height: 1.6;
+    color: var(--ink-900);
+    margin: 0;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+}
+
+#wrapper { display: flex; min-height: 100vh; width: 100%; }
+
+/* ============================================================
+   SIDEBAR — Navy + Yellow accent
+============================================================ */
+#sidebar-wrapper {
+    background: var(--brand-900);
+    color: #fff;
+    width: 280px;
+    min-height: 100vh;
+    flex-shrink: 0;
+    position: sticky;
+    top: 0;
+    height: 100vh;
+    overflow-y: auto;
+    transition: width 0.25s ease;
+    box-shadow: 2px 0 12px rgba(0,0,0,0.15);
+}
+
+#sidebar-wrapper::-webkit-scrollbar { width: 6px; }
+#sidebar-wrapper::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+
+#sidebar-wrapper .sidebar-heading {
+    padding: 1.5rem 1.35rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+
+#sidebar-wrapper .brand-block {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 1.35rem;
+    font-weight: 800;
+    letter-spacing: 0.01em;
+    color: #fff;
+    min-width: 0;
+}
+
+#sidebar-wrapper .brand-block img {
+    height: 40px;
+    width: auto;
+    flex-shrink: 0;
+}
+
+#sidebar-wrapper .brand-block .brand-text {
+    min-width: 0;
+}
+
+#sidebar-wrapper .brand-block .brand-name {
+    line-height: 1.1;
+    display: block;
+}
+
+#sidebar-wrapper .brand-block .brand-sub {
+    display: block;
+    font-size: 0.7rem;
+    font-weight: 500;
+    color: rgba(255,255,255,0.6);
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+    margin-top: 4px;
+    line-height: 1.25;
+}
+
+.menu-toggle {
+    background: rgba(255,255,255,0.08);
+    border: 1px solid rgba(255,255,255,0.15);
+    color: rgba(255,255,255,0.85);
+    font-size: 1.2rem;
+    width: 40px;
+    height: 40px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.15s;
+    flex-shrink: 0;
+}
+
+.menu-toggle:hover {
+    background: rgba(255,255,255,0.15);
+    color: #fff;
+}
+
+#sidebar-wrapper .nav-section-label {
+    padding: 1.25rem 1.35rem 0.55rem;
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: rgba(255,255,255,0.45);
+    font-weight: 700;
+}
+
+#sidebar-wrapper .list-group { padding: 0 0.85rem; }
+
+#sidebar-wrapper .list-group-item {
+    background: transparent;
+    border: none;
+    border-left: 5px solid transparent;
+    color: rgba(255,255,255,0.85);
+    padding: 0.95rem 1rem;
+    font-weight: 600;
+    font-size: 1.05rem;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    border-radius: var(--radius-sm);
+    margin-bottom: 4px;
+    transition: all 0.15s;
+    text-decoration: none;
+    min-height: 52px;
+}
+
+#sidebar-wrapper .list-group-item i {
+    width: 24px;
+    text-align: center;
+    font-size: 1.15rem;
+    color: rgba(255,255,255,0.7);
+    flex-shrink: 0;
+    transition: color 0.15s;
+}
+
+#sidebar-wrapper .list-group-item:hover {
+    background: rgba(255,255,255,0.08);
+    color: #fff;
+}
+
+#sidebar-wrapper .list-group-item:hover i { color: #fff; }
+
+#sidebar-wrapper .list-group-item.active {
+    background: rgba(255,255,255,0.1);
+    color: #fff;
+    border-left: 5px solid var(--yellow-accent);
+}
+
+#sidebar-wrapper .list-group-item.active i { color: var(--yellow-accent); }
+
+#sidebar-wrapper .badge-count {
+    font-size: 0.8rem !important;
+    padding: 4px 12px !important;
+    border-radius: 20px !important;
+    margin-left: auto;
+    font-weight: 800;
+    background: var(--yellow-accent);
+    color: var(--brand-900);
+}
+
+/* Collapsed */
+#sidebar-wrapper.collapsed { width: 90px; }
+#sidebar-wrapper.collapsed .brand-name,
+#sidebar-wrapper.collapsed .brand-sub,
+#sidebar-wrapper.collapsed .list-group-item span,
+#sidebar-wrapper.collapsed .nav-section-label { display: none; }
+#sidebar-wrapper.collapsed .list-group-item { justify-content: center; padding: 1rem 0; }
+#sidebar-wrapper.collapsed .list-group-item i { margin: 0; font-size: 1.4rem; }
+#sidebar-wrapper.collapsed .brand-block img { margin: 0; }
+#sidebar-wrapper.collapsed .badge-count { display: none; }
+#sidebar-wrapper.collapsed .sidebar-heading { justify-content: center; }
+
+/* ============================================================
+   PAGE
+============================================================ */
+#page-content-wrapper {
+    flex: 1;
+    min-width: 0;
+    background: var(--paper);
+}
+
+/* ============================================================
+   TOPBAR
+============================================================ */
+.topbar {
+    background: var(--surface);
+    border-bottom: 1px solid var(--line);
+    padding: 1.15rem 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 16px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+    flex-wrap: wrap;
+}
+
+.topbar-left {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-right: auto;
+}
+
+.topbar-right {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+}
+
+.topbar-date {
+    font-size: 1rem;
+    color: var(--ink-500);
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 500;
+}
+
+.user-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 16px 8px 8px;
+    background: var(--paper);
+    border: 1px solid var(--line);
+    border-radius: 100px;
+}
+
+.user-chip .avatar {
+    width: 42px;
+    height: 42px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, var(--brand-800), var(--brand-500));
+    color: #fff;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 1rem;
+    letter-spacing: 0.02em;
+}
+
+.user-chip .meta { font-size: 1rem; line-height: 1.2; }
+.user-chip .meta strong { display: block; font-weight: 700; color: var(--ink-900); }
+.user-chip .meta span  { color: var(--ink-500); font-size: 0.85rem; }
+
+/* ============================================================
+   MAIN
+============================================================ */
+.main { padding: 2rem; max-width: 1400px; margin: 0 auto; }
+
+/* ============================================================
+   SECTION
+============================================================ */
+.section { margin-bottom: 2rem; }
+
+.section-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 1.1rem;
+    padding: 0 2px;
+    flex-wrap: wrap;
+}
+
+.section-title h2 {
+    font-size: 1.2rem;
+    font-weight: 800;
+    color: var(--ink-900);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 14px;
+}
+
+.section-title h2::before {
+    content: '';
+    display: inline-block;
+    width: 5px;
+    height: 24px;
+    background: var(--yellow-accent);
+    border-radius: 3px;
+}
+
+.section-title .hint {
+    font-size: 0.95rem;
+    color: var(--ink-500);
+    font-weight: 500;
+}
+
+/* ============================================================
+   CARD
+============================================================ */
+.card-panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-xs);
+    overflow: hidden;
+    height: 100%;
+}
+
+.card-panel-header {
+    padding: 0.85rem 1.25rem;
+    border-bottom: 1px solid var(--line-soft);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background: #fbfcfe;
+    flex-wrap: wrap;
+}
+
+.card-panel-header h3 {
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--ink-900);
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.card-panel-header h3 i {
+    color: var(--brand-600);
+    font-size: 1rem;
+}
+
+.card-panel-body { padding: 1rem 1.25rem; }
+
+/* ============================================================
+   BALANCE PANEL
+============================================================ */
+.balance-panel {
+    background: linear-gradient(135deg, var(--brand-800) 0%, var(--brand-600) 100%);
+    color: #fff;
+    border-radius: var(--radius-lg);
+    padding: 1.15rem 1.35rem;
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+    box-shadow: 0 8px 22px rgba(26,58,92,0.2);
+    display: flex;
+    flex-direction: column;
+}
+
+.balance-panel::before {
+    content: '';
+    position: absolute;
+    top: -60px; right: -60px;
+    width: 240px; height: 240px;
+    background: radial-gradient(circle, rgba(255,255,255,0.12) 0%, transparent 70%);
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+/* Top row: label + quick pay button */
+.balance-top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    position: relative;
+    z-index: 2;
+}
+
+/* Quick pay button */
+.quick-pay {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    background: linear-gradient(135deg, var(--yellow-accent) 0%, #f59e0b 100%);
+    color: var(--brand-900);
+    padding: 9px 16px;
+    border-radius: 100px;
+    font-weight: 800;
+    font-size: 0.88rem;
+    text-decoration: none;
+    letter-spacing: 0.01em;
+    box-shadow: 0 4px 14px rgba(251,191,36,0.4);
+    transition: all 0.18s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+    border: none;
+    cursor: pointer;
+}
+
+.quick-pay:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(251,191,36,0.55);
+    color: var(--brand-900);
+}
+
+.quick-pay:active {
+    transform: translateY(0);
+}
+
+.quick-pay i {
+    font-size: 0.95rem;
+}
+
+.quick-pay .qp-icon {
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: rgba(30,58,90,0.15);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+}
+
+.balance-panel .bp-label {
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: rgba(255,255,255,0.85);
+    font-weight: 700;
+}
+
+.balance-panel .bp-amount {
+    font-size: 2.35rem;
+    font-weight: 900;
+    line-height: 1.05;
+    margin: 0.3rem 0 0.3rem;
+    letter-spacing: -0.03em;
+    color: #fff;
+    position: relative;
+    z-index: 2;
+}
+
+.balance-panel .bp-currency {
+    font-size: 1.45rem;
+    font-weight: 600;
+    opacity: 0.8;
+    margin-right: 6px;
+}
+
+.balance-panel .bp-status {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 6px 14px;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 100px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    margin-top: 0.35rem;
+    position: relative;
+    z-index: 2;
+    align-self: flex-start;
+}
+
+.balance-panel .bp-divider {
+    height: 1px;
+    background: rgba(255,255,255,0.14);
+    margin: 0.85rem 0;
+    position: relative;
+    z-index: 2;
+}
+
+.balance-panel .bp-meta {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    position: relative;
+    z-index: 2;
+}
+
+.balance-panel .bp-meta-item .lbl {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: rgba(255,255,255,0.7);
+    font-weight: 700;
+}
+
+.balance-panel .bp-meta-item .val {
+    font-size: 1.05rem;
+    font-weight: 800;
+    color: #fff;
+    margin-top: 2px;
+}
+
+/* ============================================================
+   PROGRESS
+============================================================ */
+.progress-track {
+    height: 14px;
+    background: var(--line-soft);
+    border-radius: 100px;
+    overflow: hidden;
+    margin: 0.55rem 0;
+    position: relative;
+}
+
+.progress-track .fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--brand-600), var(--brand-500));
+    border-radius: 100px;
+    transition: width 0.6s ease;
+}
+
+.progress-info {
+    display: flex;
+    justify-content: space-between;
+    font-size: 1rem;
+    color: var(--ink-700);
+    font-weight: 600;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+/* ============================================================
+   DUE DATE STRIP
+============================================================ */
+.due-strip {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 0.85rem 1.1rem;
+    border-radius: var(--radius);
+    border: 2px solid;
+    margin-top: 0.85rem;
+    font-size: 1rem;
+}
+
+.due-strip .icon-box {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.3rem;
+    flex-shrink: 0;
+    background: #fff;
+}
+
+.due-strip .txt .lbl {
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 800;
+    opacity: 0.85;
+}
+
+.due-strip .txt .val {
+    font-size: 1.15rem;
+    font-weight: 800;
+    margin-top: 2px;
+}
+
+.due-strip.ok {
+    background: var(--success-100);
+    border-color: #86efac;
+    color: var(--success-700);
+}
+
+.due-strip.soon {
+    background: var(--warning-100);
+    border-color: #fcd34d;
+    color: var(--warning-700);
+}
+
+.due-strip.overdue {
+    background: var(--danger-100);
+    border-color: #fca5a5;
+    color: var(--danger-700);
+}
+
+.due-strip a {
+    font-size: 0.95rem;
+    font-weight: 800;
+    color: inherit;
+    white-space: nowrap;
+    text-decoration: none;
+}
+
+/* ============================================================
+   BENEFIT PANEL — compact
+============================================================ */
+.benefit-panel {
+    background: linear-gradient(135deg, #1e2f45 0%, #2c4a6b 100%);
+    color: #fff;
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+    box-shadow: 0 8px 22px rgba(26,58,92,0.15);
+    position: relative;
+    height: 100%;
+}
+
+.benefit-panel::before {
+    content: '';
+    position: absolute;
+    top: 0; right: 0;
+    width: 200px; height: 200px;
+    background: radial-gradient(circle at top right, rgba(251,191,36,0.22) 0%, transparent 65%);
+    pointer-events: none;
+}
+
+.benefit-panel .bp-head {
+    padding: 0.9rem 1.25rem 0.5rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    position: relative;
+    flex-wrap: wrap;
+}
+
+.benefit-panel .bp-head .ttl {
+    font-size: 0.82rem;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: rgba(255,255,255,0.75);
+    font-weight: 800;
+}
+
+.benefit-panel .bp-head .badge {
+    background: rgba(251,191,36,0.18);
+    border: 1px solid rgba(251,191,36,0.4);
+    color: var(--yellow-accent);
+    padding: 4px 12px;
+    font-size: 0.8rem;
+    border-radius: 20px;
+    font-weight: 700;
+}
+
+.benefit-panel .bp-amount {
+    padding: 0.1rem 1.25rem 0.9rem;
+    position: relative;
+}
+
+.benefit-panel .bp-amount .num {
+    font-size: 2.35rem;
+    font-weight: 900;
+    line-height: 1;
+    color: var(--yellow-accent);
+    letter-spacing: -0.03em;
+}
+
+.benefit-panel .bp-amount .cur {
+    font-size: 1.35rem;
+    color: var(--yellow-accent);
+    opacity: 0.9;
+    margin-right: 4px;
+    font-weight: 600;
+}
+
+.benefit-panel .bp-amount .note {
+    display: block;
+    color: rgba(255,255,255,0.7);
+    font-size: 0.85rem;
+    margin-top: 6px;
+}
+
+/* ============================================================
+   BREAKDOWN — improved alignment
+============================================================ */
+.breakdown {
+    border-top: 1px solid rgba(255,255,255,0.1);
+    padding: 0.5rem 1.25rem 0.9rem;
+    background: rgba(0,0,0,0.14);
+}
+
+.breakdown-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 0.6rem 0;
+    font-size: 0.95rem;
+    border-bottom: 1px dashed rgba(255,255,255,0.1);
+}
+
+.breakdown-row:last-child { border-bottom: none; }
+
+.breakdown-row .label {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: rgba(255,255,255,0.9);
+    flex: 1;
+    min-width: 0;
+}
+
+.breakdown-row .label i {
+    font-size: 0.95rem;
+    width: 18px;
+    text-align: center;
+    color: rgba(255,255,255,0.65);
+    flex-shrink: 0;
+}
+
+.breakdown-row .label .label-text {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+    line-height: 1.25;
+}
+
+.breakdown-row .label .label-main {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.breakdown-row .label .label-sub {
+    font-size: 0.78rem;
+    color: rgba(255,255,255,0.55);
+    font-weight: 500;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.breakdown-row .amt {
+    font-weight: 800;
+    white-space: nowrap;
+    color: #fff;
+    font-size: 1rem;
+    flex-shrink: 0;
+    text-align: right;
+}
+
+.breakdown-row .amt.pos { color: #86e29e; }
+.breakdown-row .amt.neg { color: #ff9c95; }
+.breakdown-row .amt.dim { color: rgba(255,255,255,0.4); }
+
+.breakdown-total {
+    margin-top: 0.4rem;
+    padding-top: 0.75rem;
+    border-top: 2px solid rgba(251,191,36,0.4);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+}
+
+.breakdown-total .lbl {
+    font-size: 0.9rem;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    font-weight: 800;
+    color: rgba(255,255,255,0.85);
+}
+
+.breakdown-total .val {
+    font-size: 1.35rem;
+    font-weight: 900;
+    color: var(--yellow-accent);
+    letter-spacing: -0.02em;
+}
+
+.breakdown-note {
+    margin-top: 0.6rem;
+    padding-top: 0.6rem;
+    border-top: 1px dashed rgba(255,255,255,0.1);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.9rem;
+    color: rgba(255,255,255,0.75);
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.breakdown-note .v { color: #86e29e; font-weight: 800; }
+
+/* Alert pills */
+.pill {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 0.8rem 1rem;
+    border-radius: var(--radius);
+    font-size: 0.95rem;
+    margin-top: 0.6rem;
+    line-height: 1.5;
+    border: 2px solid;
+    font-weight: 500;
+}
+
+.pill i { font-size: 1.15rem; margin-top: 2px; flex-shrink: 0; }
+.pill strong { font-weight: 800; }
+
+.pill.success { background: rgba(22,163,74,0.18); border-color: rgba(134,226,158,0.4); color: #b7e8c4; }
+.pill.warning { background: rgba(217,119,6,0.18); border-color: rgba(251,191,36,0.4); color: #fad98a; }
+.pill.danger  { background: rgba(220,38,38,0.18); border-color: rgba(255,156,149,0.4); color: #ffb3ad; }
+
+/* ============================================================
+   MEMBERSHIP AT A GLANCE — compact 2×2
+============================================================ */
+.glance-grid {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 0.75rem;
+}
+
+.glance-card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 0.85rem 1rem;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    box-shadow: var(--shadow-xs);
+    transition: all 0.18s ease;
+    min-width: 0;
+}
+
+.glance-card:hover {
+    border-color: var(--brand-500);
+    box-shadow: var(--shadow-sm);
+}
+
+.glance-card .ic {
+    width: 42px;
+    height: 42px;
+    border-radius: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.15rem;
+    flex-shrink: 0;
+    background: var(--brand-100);
+    color: var(--brand-700);
+}
+
+.glance-card .ic.green { background: var(--success-100); color: var(--success-700); }
+.glance-card .ic.gold  { background: var(--yellow-100);  color: var(--yellow-dark); }
+.glance-card .ic.red   { background: var(--danger-100);  color: var(--danger-700); }
+.glance-card .ic.gray  { background: #eef1f6;            color: var(--ink-500); }
+
+.glance-card .body {
+    min-width: 0;
+    flex: 1;
+}
+
+.glance-card .val {
+    font-size: 1.2rem;
+    font-weight: 900;
+    color: var(--ink-900);
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.glance-card .val small {
+    font-size: 0.82rem;
+    font-weight: 600;
+    color: var(--ink-500);
+    letter-spacing: 0;
+}
+
+.glance-card .lbl {
+    font-size: 0.82rem;
+    color: var(--ink-500);
+    font-weight: 600;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* ============================================================
+   OVERDUE CTA
+============================================================ */
+.overdue-cta {
+    background: linear-gradient(135deg, #7f1d1d 0%, #a01a1a 100%);
+    color: #fff;
+    border-radius: var(--radius-lg);
+    padding: 1.5rem 1.75rem;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 22px;
+    flex-wrap: wrap;
+    margin-bottom: 1.75rem;
+    box-shadow: 0 8px 22px rgba(160,26,26,0.2);
+}
+
+.overdue-cta .txt h3 {
+    font-size: 1.25rem;
+    font-weight: 800;
+    margin: 0 0 6px 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    color: #fff;
+}
+
+.overdue-cta .txt p {
+    margin: 0;
+    font-size: 1rem;
+    color: rgba(255,255,255,0.9);
+    line-height: 1.5;
+}
+
+.btn-pay {
+    background: #fff;
+    color: var(--danger-700);
+    padding: 1rem 1.75rem;
+    border-radius: var(--radius);
+    font-weight: 800;
+    font-size: 1.05rem;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    transition: all 0.18s;
+    box-shadow: 0 3px 10px rgba(0,0,0,0.15);
+    white-space: nowrap;
+    border: none;
+}
+
+.btn-pay:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 20px rgba(0,0,0,0.22);
+    color: var(--danger-700);
+}
+
+.btn-pay i { font-size: 1.25rem; }
+
+/* ============================================================
+   RESPONSIVE
+============================================================ */
+.mobile-menu-toggle {
+    display: none;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    color: var(--ink-700);
+    width: 48px;
+    height: 48px;
+    border-radius: var(--radius-sm);
+    font-size: 1.25rem;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.mobile-menu-toggle:hover { background: var(--paper); border-color: var(--brand-500); color: var(--brand-600); }
+
+.sidebar-backdrop {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(15,41,66,0.5);
+    z-index: 1040;
+    backdrop-filter: blur(2px);
+}
+.sidebar-backdrop.show { display: block; }
+
+@media (max-width: 992px) {
+    #sidebar-wrapper {
+        position: fixed;
+        top: 0; left: 0;
+        z-index: 1050;
+        width: 280px !important;
+        transform: translateX(-100%);
+        transition: transform 0.25s ease;
+        box-shadow: 8px 0 24px rgba(0,0,0,0.2);
+    }
+    #sidebar-wrapper.mobile-open { transform: translateX(0); }
+
+    #sidebar-wrapper .brand-name,
+    #sidebar-wrapper .brand-sub,
+    #sidebar-wrapper .list-group-item span,
+    #sidebar-wrapper .nav-section-label { display: inline; }
+
+    #sidebar-wrapper .list-group-item { justify-content: flex-start; padding: 0.95rem 1rem; }
+    #sidebar-wrapper .list-group-item i { margin: 0; }
+    #sidebar-wrapper.collapsed { width: 280px !important; }
+
+    .mobile-menu-toggle { display: inline-flex; }
+
+    .main { padding: 1.35rem; }
+    .balance-panel .bp-amount { font-size: 2rem; }
+    .benefit-panel .bp-amount .num { font-size: 2rem; }
+    .topbar { padding: 1rem 1.35rem; }
+}
+
+@media (max-width: 576px) {
+    html { font-size: 16px; }
+    .topbar { padding: 0.85rem 1rem; }
+    .topbar-date { display: none; }
+    .user-chip .meta { display: none; }
+    .user-chip { padding: 4px; }
+
+    .main { padding: 1rem; }
+    .section-title { flex-direction: column; align-items: flex-start; gap: 6px; }
+    .balance-panel { padding: 1.1rem 1.2rem; }
+    .balance-panel .bp-amount { font-size: 1.85rem; }
+    .benefit-panel .bp-amount .num { font-size: 1.85rem; }
+    .benefit-panel .bp-amount,
+    .benefit-panel .bp-head,
+    .breakdown { padding-left: 1rem; padding-right: 1rem; }
+    .overdue-cta { padding: 1.35rem; }
+
+    /* Quick pay button — mobile tuning */
+    .quick-pay {
+        padding: 7px 12px;
+        font-size: 0.8rem;
+        gap: 6px;
+    }
+    .quick-pay .qp-icon {
+        width: 18px;
+        height: 18px;
+        font-size: 0.65rem;
+    }
+
+    /* Breakdown — mobile tuning */
+    .breakdown-row {
+        gap: 10px;
+        padding: 0.55rem 0;
+    }
+    .breakdown-row .label .label-main {
+        font-size: 0.9rem;
+    }
+    .breakdown-row .label .label-sub {
+        font-size: 0.72rem;
+    }
+    .breakdown-row .amt {
+        font-size: 0.95rem;
+    }
+    .breakdown-total .val {
+        font-size: 1.2rem;
+    }
+
+    /* Membership at a glance — mobile tuning */
+    .glance-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 0.55rem;
+    }
+    .glance-card {
+        padding: 0.65rem 0.7rem;
+        gap: 9px;
+        border-radius: 12px;
+    }
+    .glance-card .ic {
+        width: 36px;
+        height: 36px;
+        font-size: 0.95rem;
+        border-radius: 10px;
+    }
+    .glance-card .val {
+        font-size: 1rem;
+    }
+    .glance-card .val small {
+        font-size: 0.72rem;
+    }
+    .glance-card .lbl {
+        font-size: 0.72rem;
+        margin-top: 1px;
+    }
+}
+</style>
+</head>
+<body>
+
+<div class="sidebar-backdrop" id="sidebarBackdrop"></div>
+
+<div id="wrapper">
+
+    <!-- ============================================================
+         SIDEBAR
+    ============================================================ -->
+    <aside id="sidebar-wrapper">
+        <div class="sidebar-heading">
+            <div class="brand-block">
+                <img src="../assets/images/harana-logo.png" alt="NHGL"
+                     onerror="this.style.display='none';">
+                <div class="brand-text">
+                    <span class="brand-name">NHGL</span>
+                    <span class="brand-sub">Nagkaisang Haranista sa Gintong Luzon</span>
+                </div>
+            </div>
+            <button class="menu-toggle" id="menuToggle" aria-label="Toggle sidebar">
+                <i class="fas fa-bars"></i>
+            </button>
+        </div>
+
+        <div class="nav-section-label">Main</div>
+        <nav class="list-group">
+            <a href="dashboard.php" class="list-group-item active">
+                <i class="fas fa-home"></i><span>Dashboard</span>
+            </a>
+            <a href="profile.php" class="list-group-item">
+                <i class="fas fa-user"></i><span>My Profile</span>
+            </a>
+            <a href="payments.php" class="list-group-item">
+                <i class="fas fa-wallet"></i><span>Payments</span>
+            </a>
+            <a href="beneficiary.php" class="list-group-item">
+                <i class="fas fa-heart"></i><span>Beneficiary</span>
+            </a>
+        </nav>
+
+        <div class="nav-section-label">Account</div>
+        <nav class="list-group">
+            <a href="notifications.php" class="list-group-item">
+                <i class="fas fa-bell"></i><span>Notifications</span>
+            </a>
+            <a href="organization.php" class="list-group-item">
+                <i class="fas fa-building"></i><span>Organization</span>
+            </a>
+            <a href="support.php" class="list-group-item">
+                <i class="fas fa-life-ring"></i><span>Support</span>
+            </a>
+            <?php if ($is_admin): ?>
+            <a href="../admin/dashboard.php" class="list-group-item">
+                <i class="fas fa-crown"></i><span>Admin Panel</span>
+            </a>
+            <?php endif; ?>
+            <a href="../logout.php" class="list-group-item"
+               onclick="return confirm('Sign out of your account?');">
+                <i class="fas fa-sign-out-alt"></i><span>Sign out</span>
+            </a>
+        </nav>
+    </aside>
+
+    <!-- ============================================================
+         PAGE
+    ============================================================ -->
+    <div id="page-content-wrapper">
+
+        <!-- Topbar -->
+        <div class="topbar">
+            <div class="topbar-left">
+                <button class="mobile-menu-toggle" id="mobileMenuToggle" aria-label="Open menu">
+                    <i class="fas fa-bars"></i>
+                </button>
+            </div>
+
+            <div class="topbar-right">
+                <span class="topbar-date">
+                    <i class="far fa-calendar"></i>
+                    <?php echo date('l, F j, Y'); ?>
+                </span>
+                <div class="user-chip">
+                    <div class="avatar"><?php echo htmlspecialchars($initials ?: 'U'); ?></div>
+                    <div class="meta">
+                        <strong><?php echo htmlspecialchars($member['first_name'] ?? ''); ?></strong>
+                        <span>Member</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <main class="main">
+
+            <!-- ============================================================
+                 OVERDUE CTA
+            ============================================================ -->
+            <?php if ($is_overdue && $current_balance > 0): ?>
+            <div class="overdue-cta">
+                <div class="txt">
+                    <h3><i class="fas fa-exclamation-triangle"></i> Payment overdue</h3>
+                    <p>
+                        Your contribution was due on
+                        <strong><?php echo date('F j, Y', strtotime($next_due_date)); ?></strong>.
+                        Settle your balance to keep your benefits intact.
+                    </p>
+                </div>
+                <a href="payments.php" class="btn-pay">
+                    <i class="fas fa-wallet"></i> Pay now
+                </a>
+            </div>
+            <?php endif; ?>
+
+            <!-- ============================================================
+                 FINANCIAL OVERVIEW
+            ============================================================ -->
+            <section class="section">
+                <div class="row g-3">
+                    <!-- Balance panel -->
+                    <div class="col-lg-5">
+                        <div class="balance-panel">
+
+                            <!-- Top: label + quick pay button -->
+                            <div class="balance-top">
+                                <div class="bp-label">
+                                    <?php
+                                    if ($current_balance > 0)     echo 'Outstanding balance';
+                                    elseif ($current_balance < 0) echo 'Account credit';
+                                    else                          echo 'Account balance';
+                                    ?>
+                                </div>
+
+                                <a href="payments.php" class="quick-pay" title="Make a quick payment">
+                                    <span class="qp-icon"><i class="fas fa-bolt"></i></span>
+                                    Pay now
+                                    <i class="fas fa-arrow-right"></i>
+                                </a>
+                            </div>
+
+                            <div class="bp-amount">
+                                <span class="bp-currency">₱</span><?php echo number_format(abs($current_balance), 2); ?>
+                            </div>
+                            <div class="bp-status">
+                                <?php if ($current_balance > 0): ?>
+                                    <i class="fas fa-circle-info"></i> Payment due
+                                <?php elseif ($current_balance < 0): ?>
+                                    <i class="fas fa-circle-check"></i> Paid in advance
+                                <?php else: ?>
+                                    <i class="fas fa-circle-check"></i> Fully settled
+                                <?php endif; ?>
+                            </div>
+
+                            <div class="bp-divider"></div>
+
+                            <div class="bp-meta">
+                                <div class="bp-meta-item">
+                                    <div class="lbl">Total paid</div>
+                                    <div class="val">₱<?php echo number_format($total_paid, 2); ?></div>
+                                </div>
+                                <div class="bp-meta-item">
+                                    <div class="lbl">Expected</div>
+                                    <div class="val">₱<?php echo number_format($expected_total, 2); ?></div>
+                                </div>
+                                <div class="bp-meta-item">
+                                    <div class="lbl">Monthly</div>
+                                    <div class="val">₱<?php echo number_format($monthly_contribution, 2); ?></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Progress card -->
+                    <div class="col-lg-7">
+                        <div class="card-panel h-100">
+                            <div class="card-panel-header">
+                                <h3><i class="fas fa-chart-line"></i> Contribution progress</h3>
+                                <span style="font-size:0.95rem;color:var(--ink-500);font-weight:600;">
+                                    <?php echo $paid_payments; ?> of <?php echo $expected_payments; ?> months paid
+                                </span>
+                            </div>
+                            <div class="card-panel-body">
+
+                                <div class="progress-info">
+                                    <span><strong style="color:var(--ink-900);font-size:1.35rem;font-weight:900;"><?php echo $progress_pct; ?>%</strong> complete</span>
+                                    <span><?php echo $expected_payments - $paid_payments; ?> month<?php echo ($expected_payments - $paid_payments) === 1 ? '' : 's'; ?> remaining</span>
+                                </div>
+
+                                <div class="progress-track">
+                                    <div class="fill" style="width: <?php echo $progress_pct; ?>%;"></div>
+                                </div>
+
+                                <!-- Next due -->
+                                <div class="due-strip <?php echo $is_overdue ? 'overdue' : ($is_due_soon ? 'soon' : 'ok'); ?>">
+                                    <div class="icon-box">
+                                        <i class="fas <?php
+                                            echo $is_overdue ? 'fa-triangle-exclamation' : ($is_due_soon ? 'fa-hourglass-half' : 'fa-calendar-check');
+                                        ?>"></i>
+                                    </div>
+                                    <div class="txt" style="flex:1;">
+                                        <div class="lbl">
+                                            <?php
+                                            if ($is_overdue)      echo 'Payment overdue';
+                                            elseif ($is_due_soon) echo 'Due soon';
+                                            else                  echo 'Next payment due';
+                                            ?>
+                                        </div>
+                                        <div class="val"><?php echo date('F j, Y', strtotime($next_due_date)); ?></div>
+                                    </div>
+                                    <a href="payments.php">
+                                        View <i class="fas fa-arrow-right ms-1" style="font-size:0.85rem;"></i>
+                                    </a>
+                                </div>
+
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================================
+                 BENEFIT SUMMARY
+            ============================================================ -->
+            <section class="section">
+                <div class="section-title">
+                    <h2>Benefit summary</h2>
+                    <span class="hint">Based on your tenure & payment record</span>
+                </div>
+
+                <div class="benefit-panel">
+                    <div class="bp-head">
+                        <span class="ttl">Estimated total benefit</span>
+                        <span class="badge">
+                            <?php echo $years_as_member; ?> year<?php echo $years_as_member === 1 ? '' : 's'; ?> of membership
+                        </span>
+                    </div>
+
+                    <div class="bp-amount">
+                        <div class="num">
+                            <span class="cur">₱</span><?php echo number_format($total_benefit, 2); ?>
+                        </div>
+                        <span class="note">
+                            <i class="fas fa-info-circle me-1"></i>
+                            Applicable to your current payment record
+                        </span>
+                    </div>
+
+                    <div class="breakdown">
+                        <!-- Base -->
+                        <div class="breakdown-row">
+                            <span class="label">
+                                <i class="fas fa-layer-group"></i>
+                                <span class="label-text">
+                                    <span class="label-main">Base benefit</span>
+                                    <span class="label-sub"><?php echo $years_as_member; ?> yr<?php echo $years_as_member === 1 ? '' : 's'; ?> bracket</span>
+                                </span>
+                            </span>
+                            <span class="amt">₱<?php echo number_format($base_benefit, 2); ?></span>
+                        </div>
+
+                        <!-- Good payer -->
+                        <div class="breakdown-row">
+                            <span class="label">
+                                <i class="fas fa-star"
+                                   style="color: <?php echo $is_good_payer ? '#fbbf24' : 'rgba(255,255,255,0.25)'; ?>;"></i>
+                                <span class="label-text">
+                                    <span class="label-main">Good payer bonus</span>
+                                    <span class="label-sub">5+ years, ≤6 misses</span>
+                                </span>
+                            </span>
+                            <span class="amt <?php echo $is_good_payer ? 'pos' : 'dim'; ?>">
+                                <?php echo $is_good_payer
+                                    ? '+ ₱' . number_format($good_payer_bonus, 2)
+                                    : '—'; ?>
+                            </span>
+                        </div>
+
+                        <!-- Accident -->
+                        <div class="breakdown-row">
+                            <span class="label">
+                                <i class="fas fa-car-burst" style="color:#7fb3e8;"></i>
+                                <span class="label-text">
+                                    <span class="label-main">Accidental death bonus</span>
+                                    <span class="label-sub">If applicable</span>
+                                </span>
+                            </span>
+                            <span class="amt pos">+ ₱<?php echo number_format($accident_bonus, 2); ?></span>
+                        </div>
+
+                        <!-- Deduction -->
+                        <?php if ($deduction > 0): ?>
+                        <div class="breakdown-row">
+                            <span class="label">
+                                <i class="fas fa-circle-minus" style="color:#ff9c95;"></i>
+                                <span class="label-text">
+                                    <span class="label-main">Deduction</span>
+                                    <span class="label-sub"><?php echo $missed_payments; ?> missed payment<?php echo $missed_payments === 1 ? '' : 's'; ?></span>
+                                </span>
+                            </span>
+                            <span class="amt neg">− ₱<?php echo number_format($deduction, 2); ?></span>
+                        </div>
+                        <?php endif; ?>
+
+                        <!-- Total -->
+                        <div class="breakdown-total">
+                            <span class="lbl">Total benefit</span>
+                            <span class="val">₱<?php echo number_format($total_benefit, 2); ?></span>
+                        </div>
+
+                        <!-- Max (accidental) -->
+                        <?php if (!$is_donation): ?>
+                        <div class="breakdown-note">
+                            <span><i class="fas fa-arrow-trend-up me-1"></i> Maximum (if accidental):</span>
+                            <span class="v">₱<?php echo number_format($total_benefit + $accident_bonus, 2); ?></span>
+                        </div>
+                        <?php endif; ?>
+                    </div>
+
+                    <!-- Status pills -->
+                    <div style="padding:0 1.25rem 1rem;">
+                        <?php if ($missed_payments === 0): ?>
+                            <div class="pill success">
+                                <i class="fas fa-circle-check"></i>
+                                <div>
+                                    <strong>Excellent payment record.</strong>
+                                    No missed payments on your account.
+                                </div>
+                            </div>
+                        <?php else: ?>
+                            <div class="pill warning">
+                                <i class="fas fa-triangle-exclamation"></i>
+                                <div>
+                                    <strong><?php echo $missed_payments; ?> missed payment<?php echo $missed_payments === 1 ? '' : 's'; ?>.</strong>
+                                    <?php echo htmlspecialchars($deduction_reason); ?>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+
+                        <?php if (($probation['months'] ?? 0) > 0 || ($probation['status'] ?? '') === 'removal'): ?>
+                            <div class="pill danger">
+                                <i class="fas fa-clock"></i>
+                                <div>
+                                    <strong>Probation status:</strong>
+                                    <?php echo htmlspecialchars($probation['label']); ?>
+                                </div>
+                            </div>
+                        <?php endif; ?>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============================================================
+                 MEMBERSHIP AT A GLANCE
+            ============================================================ -->
+            <section class="section" style="margin-bottom:0;">
+                <div class="section-title">
+                    <h2>Membership at a glance</h2>
+                </div>
+
+                <div class="glance-grid">
+                    <!-- Tenure -->
+                    <div class="glance-card">
+                        <div class="ic"><i class="fas fa-calendar-days"></i></div>
+                        <div class="body">
+                            <div class="val"><?php echo $years_as_member; ?> <small>yr<?php echo $years_as_member === 1 ? '' : 's'; ?></small></div>
+                            <div class="lbl">Tenure</div>
+                        </div>
+                    </div>
+
+                    <!-- Missed payments -->
+                    <div class="glance-card">
+                        <div class="ic <?php echo $missed_payments > 0 ? 'red' : 'green'; ?>">
+                            <i class="fas <?php echo $missed_payments > 0 ? 'fa-circle-exclamation' : 'fa-circle-check'; ?>"></i>
+                        </div>
+                        <div class="body">
+                            <div class="val"><?php echo $missed_payments; ?></div>
+                            <div class="lbl">Missed</div>
+                        </div>
+                    </div>
+
+                    <!-- Good payer status -->
+                    <div class="glance-card">
+                        <div class="ic <?php echo $is_good_payer ? 'gold' : 'gray'; ?>">
+                            <i class="fas fa-award"></i>
+                        </div>
+                        <div class="body">
+                            <div class="val" style="font-size:1rem;">
+                                <?php echo $is_good_payer ? 'Qualified' : 'Not qualified'; ?>
+                            </div>
+                            <div class="lbl">Good payer</div>
+                        </div>
+                    </div>
+
+                    <!-- Monthly contribution -->
+                    <div class="glance-card">
+                        <div class="ic green"><i class="fas fa-coins"></i></div>
+                        <div class="body">
+                            <div class="val">₱<?php echo number_format($monthly_contribution, 0); ?></div>
+                            <div class="lbl">Monthly</div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+(function () {
+    const sidebar   = document.getElementById('sidebar-wrapper');
+    const menuBtn   = document.getElementById('menuToggle');
+    const mobileBtn = document.getElementById('mobileMenuToggle');
+    const backdrop  = document.getElementById('sidebarBackdrop');
+
+    const isMobile = () => window.innerWidth <= 992;
+
+    if (!isMobile() && localStorage.getItem('sidebarCollapsed') === 'true') {
+        sidebar.classList.add('collapsed');
+    }
+
+    menuBtn?.addEventListener('click', () => {
+        if (isMobile()) {
+            sidebar.classList.toggle('mobile-open');
+            backdrop.classList.toggle('show');
+        } else {
+            sidebar.classList.toggle('collapsed');
+            localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed'));
+        }
+    });
+
+    mobileBtn?.addEventListener('click', () => {
+        sidebar.classList.add('mobile-open');
+        backdrop.classList.add('show');
+    });
+
+    backdrop?.addEventListener('click', () => {
+        sidebar.classList.remove('mobile-open');
+        backdrop.classList.remove('show');
+    });
+
+    window.addEventListener('resize', () => {
+        if (!isMobile()) {
+            sidebar.classList.remove('mobile-open');
+            backdrop.classList.remove('show');
+        }
+    });
+})();
+</script>
+</body>
+</html>

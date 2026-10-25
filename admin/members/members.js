@@ -1,17 +1,24 @@
 // admin/members/members.js
-
-// Sidebar Toggle Functionality
+// ========================================
+// SIDEBAR TOGGLE + PERSISTENCE (no-flash)
+// ========================================
 const menuToggle = document.getElementById('menuToggle');
 const sidebar = document.getElementById('sidebar-wrapper');
 const headerLogo = document.getElementById('headerLogo');
 
-// Check if sidebar state is saved in localStorage
-const sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
-
-// Apply saved state on page load
-if (sidebarCollapsed) {
+// Apply the persisted state so subsequent logic reads correct value.
+if (localStorage.getItem('sidebarCollapsed') === 'true') {
     sidebar.classList.add('collapsed');
 }
+
+// After first paint, swap from "pre-paint" CSS to normal transitions.
+// Double rAF guarantees the browser painted once before transitions re-enable.
+requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+        document.documentElement.classList.remove('sidebar-was-collapsed');
+        document.documentElement.classList.add('sidebar-transitions-on');
+    });
+});
 
 if (menuToggle) {
     menuToggle.addEventListener('click', function() {
@@ -19,7 +26,6 @@ if (menuToggle) {
         localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed'));
     });
 }
-
 // City data from PHP
 const citiesByProvince = window.citiesData || {};
 
@@ -75,13 +81,16 @@ function calculateAge(prefix) {
         ageField.value = age;
     }
 }
-
 // View member details
 function viewMemberDetails(memberCode) {
     const modalEl = document.getElementById('viewMemberModal');
     if (!modalEl) return;
     
-    const modal = new bootstrap.Modal(modalEl);
+    // SAFE MODAL INIT: Check if instance already exists, otherwise create it
+    let modal = bootstrap.Modal.getInstance(modalEl);
+    if (!modal) {
+        modal = new bootstrap.Modal(modalEl);
+    }
     const contentEl = document.getElementById('memberDetailsContent');
     
     contentEl.innerHTML = `
@@ -132,7 +141,23 @@ function viewMemberDetails(memberCode) {
                     <h4 class="form-title">APPLICATION FOR MEMBERSHIP</h4>
 
                     <div class="documents-section">
-                        <h4>Documents Attached:</h4>
+                        <div class="documents-section-header">
+                            <h4 class="mb-0">Documents Attached:</h4>
+                            <div class="doc-actions">
+                                ${data.birth_certificate_file
+                                    ? `<button type="button" class="btn btn-sm btn-outline-primary"
+                                               onclick="openDocumentViewer('${memberCode}', 'birth_certificate_file', 'Birth Certificate');">
+                                           <i class="fas fa-file-image me-1"></i>View Birth Certificate
+                                       </button>`
+                                    : ''}
+                                ${data.medical_certificate_file
+                                    ? `<button type="button" class="btn btn-sm btn-outline-primary"
+                                               onclick="openDocumentViewer('${memberCode}', 'medical_certificate_file', 'Medical Certificate');">
+                                           <i class="fas fa-file-medical me-1"></i>View Medical Certificate
+                                       </button>`
+                                    : ''}
+                            </div>
+                        </div>
                         <div class="checkbox-group">
                             <div class="checkbox-item">
                                 <input type="checkbox" ${data.medical_certificate == 1 ? 'checked' : ''} disabled>
@@ -784,12 +809,423 @@ function setupDeleteFormHandler() {
     }
 }
 
-// Also handle the multiple delete
-window.confirmMultipleDelete = function() {
-    const selectedCount = $('.member-checkbox:checked').length;
-    if (selectedCount === 0) {
-        alert('Please select at least one member to delete.');
-        return false;
+
+// ============================================================
+// DOCUMENT VIEWER (fallback path)
+// ============================================================
+// NOTE: The primary openDocumentViewer() lives in the inline
+// <script> of members.php. This block provides the SAME function
+// in the external file so both paths work if the inline script
+// is ever removed. Guarded so we don't clobber the inline one.
+// ============================================================
+if (typeof window.openDocumentViewer !== 'function') {
+    window.openDocumentViewer = function(memberCode, docType, title) {
+        if (!memberCode || !docType) {
+            alert('Missing document reference.');
+            return;
+        }
+
+        const modalEl = document.getElementById('documentViewerModal');
+        const titleEl = document.getElementById('docViewerTitle');
+        const bodyEl  = document.getElementById('docViewerBody');
+        const dlBtn   = document.getElementById('docViewerDownload');
+        const tabBtn  = document.getElementById('docViewerOpenTab');
+
+        if (!modalEl || !bodyEl) {
+            alert('Document viewer not available. Please refresh the page.');
+            return;
+        }
+
+        const url = 'view_document.php'
+                  + '?member_code=' + encodeURIComponent(memberCode)
+                  + '&doc_type='    + encodeURIComponent(docType);
+
+        titleEl.textContent = title || 'Document';
+        bodyEl.innerHTML = `
+            <div class="text-center p-5">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <p class="mt-3 text-muted">Loading document...</p>
+            </div>
+        `;
+
+        dlBtn.href  = url;
+        dlBtn.setAttribute('download', (title || 'document'));
+        tabBtn.href = url;
+
+        const modal = new bootstrap.Modal(modalEl);
+        modal.show();
+
+        fetch(url, { method: 'GET', credentials: 'same-origin' })
+            .then(response => {
+                if (!response.ok) {
+                    return response.text().then(msg => {
+                        throw new Error(msg || ('HTTP ' + response.status));
+                    });
+                }
+                const ct = (response.headers.get('Content-Type') || '').toLowerCase();
+
+                if (ct.indexOf('application/pdf') !== -1) {
+                    bodyEl.innerHTML = `
+                        <iframe src="${url}"
+                                style="width:100%; height:78vh; border:0; display:block;"
+                                title="${title}"></iframe>
+                    `;
+                } else if (ct.indexOf('image/') === 0) {
+                    bodyEl.innerHTML = `
+                        <div style="padding:20px;">
+                            <img src="${url}" alt="${title}"
+                                 style="max-width:100%; max-height:75vh; border-radius:8px;
+                                        box-shadow:0 2px 12px rgba(0,0,0,0.1); background:#fff;">
+                        </div>
+                    `;
+                } else {
+                    bodyEl.innerHTML = `
+                        <div class="alert alert-info m-4">
+                            <i class="fas fa-info-circle me-2"></i>
+                            This file type can't be previewed inline.
+                            Use <strong>Download</strong> or <strong>Open in New Tab</strong> below.
+                        </div>
+                    `;
+                }
+            })
+            .catch(err => {
+                const msg = (err && err.message) ? err.message : 'Unable to load document.';
+                bodyEl.innerHTML = `
+                    <div class="alert alert-danger m-4 text-start">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        <strong>Document unavailable.</strong><br>
+                        <small class="text-muted">${msg}</small>
+                    </div>
+                `;
+            });
+    };
+}
+
+// ============================================================
+// EDIT HISTORY — VIEW DETAILS WITH SELECTIVE REVERT
+// ============================================================
+function viewEditDetails(logId, memberCode) {
+    const modalEl = document.getElementById('editDetailsModal');
+    if (!modalEl) return;
+
+    const modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+    const content = document.getElementById('editDetailsContent');
+    const title = document.getElementById('editDetailsTitle');
+    const revertBtn = document.getElementById('revertFromDetailsBtn');
+
+    content.innerHTML = `
+        <div class="text-center p-5">
+            <div class="spinner-border text-info" role="status">
+                <span class="visually-hidden">Loading...</span>
+            </div>
+            <p class="mt-3">Loading edit details...</p>
+        </div>
+    `;
+    revertBtn.style.display = 'none';
+    title.textContent = 'Edit Details - ' + memberCode;
+
+    modal.show();
+
+    fetch('members.php?get_edit_details=1&log_id=' + logId)
+        .then(response => response.json())
+        .then(data => {
+            if (!data.success) {
+                content.innerHTML = `
+                    <div class="alert alert-danger m-3">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        Error loading edit details: ${data.error || 'Unknown error'}
+                    </div>
+                `;
+                return;
+            }
+
+            let html = '';
+            const actionType = data.log.action_type || 'edit';
+            const adminName = data.log.admin_name || 'System';
+            const createdAt = new Date(data.log.created_at).toLocaleString();
+
+            html += `
+                <div class="edit-details-header mb-4">
+                    <div class="row">
+                        <div class="col-md-4">
+                            <strong>Member:</strong> ${memberCode}
+                            <br><span class="badge bg-secondary">${memberCode}</span>
+                        </div>
+                        <div class="col-md-4">
+                            <strong>Action:</strong>
+                            <span class="badge bg-${actionType == 'edit' ? 'info' : (actionType == 'revert' ? 'warning' : 'success')}">
+                                ${actionType.toUpperCase()}
+                            </span>
+                            <br><strong>By:</strong> ${adminName}
+                        </div>
+                        <div class="col-md-4 text-end">
+                            <strong>Date:</strong> ${createdAt}
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            const changes = data.changes || {};
+
+            // ============================================================
+            // SPECIAL CASE: Revert Receipt
+            // ============================================================
+            if (actionType === 'revert' && changes.reverted_fields) {
+                const revertedFields = changes.reverted_fields;
+                const fieldKeys = Object.keys(revertedFields);
+
+                html += `
+                    <div class="alert alert-warning mb-3">
+                        <i class="fas fa-receipt me-2"></i>
+                        <strong>REVERT RECEIPT</strong>
+                        ${changes.partial_revert ? '<span class="badge bg-info text-dark ms-2">Partial</span>' : ''}
+                        <hr class="my-2">
+                        <div class="row small">
+                            <div class="col-md-6">
+                                <strong>Original Edit By:</strong> ${changes.original_admin || 'System'}<br>
+                                <strong>Original Date:</strong> ${new Date(changes.original_date).toLocaleString()}<br>
+                                <strong>Original Log ID:</strong> #${changes.reverted_log_id}
+                            </div>
+                            <div class="col-md-6">
+                                <strong>Reverted By:</strong> ${changes.reverted_by}<br>
+                                <strong>Reverted At:</strong> ${new Date(changes.reverted_at).toLocaleString()}
+                            </div>
+                        </div>
+                    </div>
+                `;
+
+                if (fieldKeys.length === 0) {
+                    html += `<div class="alert alert-info">No fields were reverted.</div>`;
+                } else {
+                    html += `
+                        <div class="table-responsive">
+                            <table class="table table-bordered table-hover">
+                                <thead class="table-light">
+                                    <tr>
+                                        <th style="width: 25%;">Field</th>
+                                        <th style="width: 35%;">Value Before Revert</th>
+                                        <th style="width: 40%;">Value After Revert (Restored)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                    `;
+
+                    fieldKeys.forEach(key => {
+                        const fromVal = revertedFields[key].from || '';
+                        const toVal = revertedFields[key].to || '';
+                        const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+                        html += `
+                            <tr class="table-warning">
+                                <td><strong>${displayKey}</strong></td>
+                                <td class="text-danger">${fromVal || '<span class="text-muted">(empty)</span>'}</td>
+                                <td class="text-success">${toVal || '<span class="text-muted">(empty)</span>'}</td>
+                            </tr>
+                        `;
+                    });
+
+                    html += `</tbody></table></div>`;
+                }
+
+                content.innerHTML = html;
+                return;
+            }
+
+            // ============================================================
+            // Regular edit/add log display WITH SELECTION CHECKBOXES
+            // ============================================================
+            const changeKeys = Object.keys(changes);
+
+            if (changeKeys.length === 0) {
+                html += `<div class="alert alert-info">No field changes recorded for this edit.</div>`;
+            } else {
+                html += `
+                    <div class="alert alert-info mb-2 py-2">
+                        <i class="fas fa-info-circle me-1"></i>
+                        <small>Check specific fields you want to revert, then click <strong>Revert Selected Fields</strong>. If nothing is checked, all changed fields will be reverted.</small>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="table table-bordered table-hover" id="editDetailsTable">
+                            <thead class="table-light">
+                                <tr>
+                                    <th style="width: 5%;" class="text-center">
+                                        <input type="checkbox" id="selectAllChanges" title="Select all" checked>
+                                    </th>
+                                    <th style="width: 20%;">Field</th>
+                                    <th style="width: 32%;">Old Value</th>
+                                    <th style="width: 32%;">New Value</th>
+                                    <th style="width: 11%;">Status</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                `;
+
+                changeKeys.forEach(key => {
+                    const oldValue = changes[key].old || '';
+                    const newValue = changes[key].new || '';
+                    const isChanged = oldValue !== newValue;
+                    const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+
+                    html += `
+                        <tr class="${isChanged ? 'table-warning' : ''}">
+                            <td class="text-center">
+                                <input type="checkbox"
+                                       class="change-checkbox"
+                                       value="${key}"
+                                       data-field="${key}"
+                                       ${isChanged ? 'checked' : 'disabled'}>
+                            </td>
+                            <td><strong>${displayKey}</strong></td>
+                            <td class="${isChanged ? 'text-danger' : ''}">
+                                ${oldValue || '<span class="text-muted">(empty)</span>'}
+                            </td>
+                            <td class="${isChanged ? 'text-success' : ''}">
+                                ${newValue || '<span class="text-muted">(empty)</span>'}
+                            </td>
+                            <td class="text-center">
+                                ${isChanged ? '<span class="badge bg-warning text-dark">Changed</span>' : '<span class="badge bg-secondary">Same</span>'}
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                html += `
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+            }
+
+            if (actionType === 'edit' && changeKeys.length > 0) {
+                revertBtn.style.display = 'inline-block';
+                revertBtn.innerHTML = '<i class="fas fa-undo me-1"></i> Revert Selected Fields';
+                revertBtn.onclick = function() {
+                    const checked = [];
+                    document.querySelectorAll('#editDetailsContent .change-checkbox:checked').forEach(cb => {
+                        checked.push(cb.value);
+                    });
+                    modal.hide();
+                    setTimeout(() => {
+                        confirmRevert(logId, memberCode, checked);
+                    }, 300);
+                };
+            } else {
+                revertBtn.style.display = 'none';
+            }
+
+            content.innerHTML = html;
+
+            // Wire up select-all checkbox
+            const selectAll = document.getElementById('selectAllChanges');
+            if (selectAll) {
+                selectAll.addEventListener('change', function() {
+                    document.querySelectorAll('#editDetailsContent .change-checkbox:not(:disabled)').forEach(cb => {
+                        cb.checked = selectAll.checked;
+                    });
+                });
+                document.querySelectorAll('#editDetailsContent .change-checkbox').forEach(cb => {
+                    cb.addEventListener('change', function() {
+                        const all = document.querySelectorAll('#editDetailsContent .change-checkbox:not(:disabled)');
+                        const allChecked = Array.from(all).every(x => x.checked);
+                        if (selectAll) selectAll.checked = allChecked;
+                    });
+                });
+            }
+        })
+        .catch(error => {
+            content.innerHTML = `
+                <div class="alert alert-danger m-3">
+                    <i class="fas fa-exclamation-circle me-2"></i>
+                    Error loading edit details. Please try again.
+                </div>
+            `;
+        });
+}
+
+// ============================================================
+// CONFIRM REVERT — with selective fields
+// ============================================================
+function confirmRevert(logId, memberCode, selectedFields) {
+    selectedFields = selectedFields || [];
+    const isPartial = selectedFields.length > 0;
+
+    const modalEl = document.getElementById('revertConfirmModal');
+    if (!modalEl) return;
+
+    const modal = bootstrap.Modal.getInstance(modalEl) || new bootstrap.Modal(modalEl);
+    const memberNameSpan = document.getElementById('revertMemberName');
+    const changesList = document.getElementById('revertChangesList');
+    const logIdInput = document.getElementById('revertLogId');
+    const selectedContainer = document.getElementById('revertSelectedFieldsContainer');
+    const banner = document.getElementById('revertBannerText');
+
+    memberNameSpan.textContent = memberCode;
+    logIdInput.value = logId;
+
+    // Inject hidden inputs for selected fields
+    if (selectedContainer) {
+        selectedContainer.innerHTML = '';
+        selectedFields.forEach(f => {
+            const inp = document.createElement('input');
+            inp.type = 'hidden';
+            inp.name = 'selected_fields[]';
+            inp.value = f;
+            selectedContainer.appendChild(inp);
+        });
     }
-    return confirm('⚠️ Are you sure you want to delete ' + selectedCount + ' selected member(s)?\n\nThey will be moved to deleted history and can be recovered within 50 days.');
-};
+
+    if (banner) {
+        banner.innerHTML = '<i class="fas fa-info-circle me-1"></i> Loading...';
+    }
+    changesList.innerHTML = '<li class="text-muted">Loading changes...</li>';
+
+    modal.show();
+
+    fetch('members.php?get_edit_details=1&log_id=' + logId)
+        .then(response => response.json())
+        .then(data => {
+            if (!data.success) {
+                changesList.innerHTML = `<li class="text-danger">Error loading changes: ${data.error || 'Unknown error'}</li>`;
+                return;
+            }
+
+            const changes = data.changes || {};
+            const changeKeys = Object.keys(changes);
+
+            const fieldsToShow = isPartial
+                ? changeKeys.filter(k => selectedFields.includes(k))
+                : changeKeys;
+
+            if (banner) {
+                banner.innerHTML = isPartial
+                    ? `<i class="fas fa-info-circle me-1"></i> <strong>Partial revert:</strong> Only the ${fieldsToShow.length} selected field(s) will be reverted. Other changes will remain.`
+                    : `<i class="fas fa-info-circle me-1"></i> <strong>Full revert:</strong> All ${fieldsToShow.length} changed field(s) will be reverted.`;
+            }
+
+            if (fieldsToShow.length === 0) {
+                changesList.innerHTML = '<li class="text-muted">No changes to revert</li>';
+            } else {
+                changesList.innerHTML = '';
+                fieldsToShow.forEach(key => {
+                    const displayKey = key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+                    const oldValue = changes[key].old || '(empty)';
+                    const newValue = changes[key].new || '(empty)';
+
+                    const li = document.createElement('li');
+                    li.className = 'revert-change-item';
+                    li.innerHTML = `
+                        <span class="badge bg-light text-dark me-2">${displayKey}</span>
+                        <span class="text-danger text-decoration-line-through me-2">${oldValue}</span>
+                        <i class="fas fa-arrow-right text-muted me-2"></i>
+                        <span class="text-success">${newValue}</span>
+                    `;
+                    changesList.appendChild(li);
+                });
+            }
+        })
+        .catch(error => {
+            changesList.innerHTML = `<li class="text-danger">Error loading changes: ${error.message}</li>`;
+        });
+}

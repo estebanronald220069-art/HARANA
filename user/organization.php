@@ -1,5 +1,5 @@
 <?php
-// user/organization.php
+// user/beneficiary.php — Phone-first redesign (2026-10)
 require_once '../includes/config.php';
 require_once '../includes/db_connection.php';
 require_once '../includes/security.php';
@@ -10,1102 +10,499 @@ $auth->requireLogin();
 $current_user = $auth->getCurrentUser();
 
 $db = Database::getInstance();
+$member = getUserMemberData($db, $current_user);
 
-// Get organization statistics
-$total_members = $db->getSingle("SELECT COUNT(*) as total FROM members WHERE status = 'active'")['total'] ?? 0;
-$total_chapters = $db->getSingle("SELECT COUNT(DISTINCT chapter) as total FROM members WHERE chapter IS NOT NULL AND chapter != ''")['total'] ?? 0;
-$total_paid = $db->getSingle("SELECT COALESCE(SUM(amount), 0) as total FROM payments WHERE payment_status = 'confirmed'")['total'] ?? 0;
+if (!$member || empty($member['member_code'])) {
+    header('Location: dashboard.php?error=member_not_found');
+    exit();
+}
 
-// Get council members
-$council_members = $db->getAll(
-    "SELECT * FROM council WHERE status = 'active' ORDER BY 
-     CASE position 
-         WHEN 'CEO/President' THEN 1
-         WHEN 'COO/Vice President' THEN 2
-         WHEN 'CFO/Treasurer' THEN 3
-         WHEN 'Corporate Secretary' THEN 4
-         WHEN 'Book Keeper' THEN 5
-         ELSE 99
-     END"
+$member_code = $member['member_code'];
+$message = '';
+$error = '';
+
+// Calculate membership duration
+$date_joined = $member['date_joined'] ?? date('Y-m-d');
+$join_date = new DateTime($date_joined);
+$today = new DateTime();
+$years_as_member = $join_date->diff($today)->y;
+
+function calculateDeathBenefit($years) {
+    $benefit_table = [
+        1 => 80000, 2 => 80000, 3 => 90000, 4 => 90000,
+        5 => 100000, 6 => 100000, 7 => 110000, 8 => 110000,
+        9 => 115000, 10 => 120000, 11 => 125000, 12 => 130000,
+        13 => 135000, 14 => 140000, 15 => 145000, 16 => 150000
+    ];
+    if ($years >= 16) return 150000;
+    if ($years >= 1 && $years <= 16) return $benefit_table[$years] ?? 80000;
+    return 0;
+}
+
+$base_benefit = calculateDeathBenefit($years_as_member);
+$accident_bonus = 10000;
+$good_payer_bonus = 5000;
+$total_benefit = $base_benefit + $accident_bonus + $good_payer_bonus;
+
+$pending_request = $db->getSingle(
+    "SELECT * FROM beneficiary_requests WHERE member_code = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1",
+    [$member_code], 's'
 );
 
-// Get chapter officials
-$chapter_officials = $db->getAll(
-    "SELECT full_name, position FROM council 
-     WHERE status = 'active' AND (position LIKE '%Coordinator%' OR position LIKE '%Leader%' OR position LIKE '%Officer%')
-     ORDER BY position"
-);
-
+// Handle submit
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_beneficiary'])) {
+    if (!Security::validateCSRFToken($_POST['csrf_token'] ?? '')) {
+        $error = 'Invalid security token';
+    } else {
+        $beneficiary_name = Security::sanitize($_POST['beneficiary_name'] ?? '');
+        $beneficiary_address = Security::sanitize($_POST['beneficiary_address'] ?? '');
+        $beneficiary_relation = Security::sanitize($_POST['beneficiary_relation'] ?? '');
+        $beneficiary_age = !empty($_POST['beneficiary_age']) ? intval($_POST['beneficiary_age']) : null;
+        $beneficiary_contact = Security::sanitize($_POST['beneficiary_contact'] ?? '');
+        
+        if (empty($beneficiary_name) || empty($beneficiary_address) || empty($beneficiary_relation)) {
+            $error = 'Please fill in all required fields.';
+        } elseif ($pending_request) {
+            $error = 'You already have a pending beneficiary update request.';
+        } else {
+            $uploaded_files = [];
+            $upload_dir = '../uploads/beneficiary/';
+            if (!file_exists($upload_dir)) { mkdir($upload_dir, 0777, true); }
+            
+            if (!empty($_FILES['documents']['name'][0])) {
+                $allowed_types = ['image/jpeg', 'image/png', 'image/gif', 'application/pdf'];
+                $max_size = 5 * 1024 * 1024;
+                
+                foreach ($_FILES['documents']['tmp_name'] as $key => $tmp_name) {
+                    if ($_FILES['documents']['error'][$key] === UPLOAD_ERR_OK) {
+                        $file_name = $_FILES['documents']['name'][$key];
+                        $file_type = $_FILES['documents']['type'][$key];
+                        $file_size = $_FILES['documents']['size'][$key];
+                        
+                        if (!in_array($file_type, $allowed_types)) { $error = 'Invalid file type.'; break; }
+                        if ($file_size > $max_size) { $error = 'File size must be less than 5MB'; break; }
+                        
+                        $new_filename = $member_code . '_' . time() . '_' . $key . '_' . preg_replace('/[^a-zA-Z0-9\.]/', '_', $file_name);
+                        if (move_uploaded_file($tmp_name, $upload_dir . $new_filename)) {
+                            $uploaded_files[] = $new_filename;
+                        }
+                    }
+                }
+            }
+            
+            if (empty($error)) {
+                $documents_json = !empty($uploaded_files) ? json_encode($uploaded_files) : null;
+                $result = $db->execute(
+                    "INSERT INTO beneficiary_requests (member_code, beneficiary_name, beneficiary_address, beneficiary_relation, beneficiary_age, beneficiary_contact, documents, status, created_at) 
+                     VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', NOW())",
+                    [$member_code, $beneficiary_name, $beneficiary_address, $beneficiary_relation, $beneficiary_age, $beneficiary_contact, $documents_json],
+                    'sssssss'
+                );
+                if ($result) {
+                    $message = 'Update request submitted successfully!';
+                    $pending_request = $db->getSingle("SELECT * FROM beneficiary_requests WHERE member_code = ? AND status = 'pending' ORDER BY created_at DESC LIMIT 1", [$member_code], 's');
+                } else {
+                    $error = 'Failed to submit request.';
+                }
+            }
+        }
+    }
+}
 $csrf_token = Security::generateCSRFToken();
 ?>
-
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>About NHGL - <?php echo APP_NAME; ?></title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        :root {
-            --primary-color: #375a7f;
-            --secondary-color: #2c4a6b;
-            --success-color: #28a745;
-            --warning-color: #ffc107;
-            --danger-color: #dc3545;
-            --info-color: #17a2b8;
-            --dark-color: #2c3e50;
-            --light-color: #f8f9fa;
-        }
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            background: #f4f7fc;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            overflow: hidden;
-            margin: 0;
-            padding: 0;
-        }
-
-        #wrapper {
-            display: flex;
-            width: 100%;
-            height: 100vh;
-            overflow: hidden;
-        }
-
-        /* Sidebar Styles */
-        #sidebar-wrapper {
-            background: #375a7f;
-            color: #fff;
-            width: 250px;
-            height: 100vh;
-            overflow-y: auto;
-            transition: width 0.3s ease;
-            box-shadow: 4px 0 10px rgba(0,0,0,0.1);
-            white-space: nowrap;
-        }
-
-        #sidebar-wrapper.collapsed {
-            width: 70px;
-        }
-
-        #sidebar-wrapper.collapsed .sidebar-heading span {
-            display: none;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item span {
-            display: none;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item i {
-            margin-right: 0;
-            width: 100%;
-            text-align: center;
-            font-size: 1.2rem;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item {
-            padding: 15px 0;
-            text-align: center;
-        }
-
-        #sidebar-wrapper.collapsed .badge {
-            display: none;
-        }
-
-        #sidebar-wrapper.collapsed .sidebar-heading img {
-            display: none;
-        }
-
-        #sidebar-wrapper .sidebar-heading {
-            padding: 1.2rem 1rem;
-            font-size: 1.4rem;
-            font-weight: 600;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            background: #375a7f;
-            color: white;
-            text-align: left;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        #sidebar-wrapper.collapsed .sidebar-heading {
-            justify-content: center;
-            padding: 1.2rem 0;
-        }
-
-        #sidebar-wrapper .sidebar-heading img {
-            height: 30px;
-            width: auto;
-            margin-right: 10px;
-            vertical-align: middle;
-        }
-
-        .menu-toggle {
-            background: transparent;
-            border: none;
-            font-size: 1.5rem;
-            color: white;
-            cursor: pointer;
-            padding: 0 10px;
-            transition: all 0.2s;
-        }
-
-        .menu-toggle:hover {
-            color: #fff;
-            transform: scale(1.1);
-        }
-
-        .header-logo {
-            height: 30px;
-            width: auto;
-            margin-right: 10px;
-            vertical-align: middle;
-            transition: all 0.3s ease;
-            display: none;
-        }
-
-        #sidebar-wrapper.collapsed ~ #page-content-wrapper .header-logo {
-            display: inline-block;
-        }
-
-        #sidebar-wrapper .list-group-item {
-            background: transparent;
-            border: none;
-            color: rgba(255,255,255,0.9);
-            padding: 0.8rem 1.2rem;
-            font-weight: 500;
-            transition: all 0.2s;
-            font-size: 0.95rem;
-            text-align: left;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item {
-            padding: 15px 0;
-            text-align: center;
-        }
-
-        #sidebar-wrapper .list-group-item:hover,
-        #sidebar-wrapper .list-group-item.active {
-            background: rgba(255,255,255,0.15);
-            color: #fff;
-            border-left: 4px solid #fff;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item:hover,
-        #sidebar-wrapper.collapsed .list-group-item.active {
-            border-left: none;
-            border-bottom: 2px solid #fff;
-        }
-
-        #sidebar-wrapper .list-group-item i {
-            width: 24px;
-            text-align: center;
-            margin-right: 10px;
-            font-size: 1rem;
-            transition: all 0.3s ease;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item i {
-            margin-right: 0;
-            width: 100%;
-            font-size: 1.2rem;
-        }
-
-        #page-content-wrapper {
-            flex: 1;
-            background: #f4f7fc;
-            height: 100vh;
-            overflow-y: auto;
-            padding: 0;
-        }
-
-        /* Navbar */
-        .navbar {
-            background: #fff !important;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            padding: 0.7rem 1.2rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-
-        .navbar-left {
-            display: flex;
-            align-items: center;
-        }
-
-        .navbar-brand {
-            font-size: 1.2rem;
-            font-weight: 500;
-            color: #375a7f !important;
-            display: flex;
-            align-items: center;
-        }
-
-        .navbar-brand i {
-            color: #375a7f;
-        }
-
-        .navbar-right {
-            display: flex;
-            align-items: center;
-            gap: 20px;
-        }
-
-        /* Container */
-        .organization-container {
-            padding: 20px;
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-
-        /* Hero Section */
-        .hero-section {
-            background: linear-gradient(135deg, #375a7f, #2c4a6b);
-            color: white;
-            padding: 40px;
-            border-radius: 16px;
-            margin-bottom: 30px;
-            position: relative;
-            overflow: hidden;
-        }
-
-        .hero-section::before {
-            content: '';
-            position: absolute;
-            top: -50%;
-            right: -50%;
-            width: 200%;
-            height: 200%;
-            background: radial-gradient(circle, rgba(255,255,255,0.1) 0%, transparent 70%);
-            animation: rotate 20s linear infinite;
-        }
-
-        @keyframes rotate {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
-        }
-
-        .hero-title {
-            font-size: 2rem;
-            font-weight: 800;
-            margin-bottom: 15px;
-            position: relative;
-            z-index: 2;
-        }
-
-        .hero-subtitle {
-            font-size: 1rem;
-            opacity: 0.9;
-            position: relative;
-            z-index: 2;
-        }
-
-        /* Stats Cards */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-
-        .stat-card {
-            background: white;
-            border-radius: 12px;
-            padding: 25px;
-            text-align: center;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            transition: all 0.3s ease;
-        }
-
-        .stat-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 20px rgba(55,90,127,0.15);
-        }
-
-        .stat-icon {
-            width: 60px;
-            height: 60px;
-            background: rgba(55,90,127,0.1);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 15px;
-        }
-
-        .stat-icon i {
-            font-size: 1.8rem;
-            color: #375a7f;
-        }
-
-        .stat-number {
-            font-size: 2rem;
-            font-weight: 700;
-            color: #2c3e50;
-        }
-
-        .stat-label {
-            font-size: 0.85rem;
-            color: #6c757d;
-        }
-
-        /* Mission & Vision Cards */
-        .mv-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-
-        .mission-card {
-            background: linear-gradient(135deg, #375a7f, #2c4a6b);
-            color: white;
-            border-radius: 12px;
-            padding: 30px;
-            height: 100%;
-        }
-
-        .vision-card {
-            background: linear-gradient(135deg, #28a745, #20c997);
-            color: white;
-            border-radius: 12px;
-            padding: 30px;
-            height: 100%;
-        }
-
-        .mv-icon {
-            font-size: 2.5rem;
-            margin-bottom: 20px;
-        }
-
-        .mv-title {
-            font-size: 1.5rem;
-            font-weight: 700;
-            margin-bottom: 15px;
-        }
-
-        .mv-text {
-            line-height: 1.6;
-            opacity: 0.95;
-        }
-
-        /* Core Values */
-        .core-values-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-
-        .core-value-card {
-            background: white;
-            border-radius: 12px;
-            padding: 25px;
-            text-align: center;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            transition: all 0.3s ease;
-        }
-
-        .core-value-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 20px rgba(55,90,127,0.15);
-        }
-
-        .core-value-icon {
-            width: 70px;
-            height: 70px;
-            background: rgba(55,90,127,0.1);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 15px;
-        }
-
-        .core-value-icon i {
-            font-size: 2rem;
-            color: #375a7f;
-        }
-
-        .core-value-title {
-            font-weight: 700;
-            color: #2c3e50;
-            margin-bottom: 10px;
-        }
-
-        .core-value-text {
-            font-size: 0.85rem;
-            color: #6c757d;
-        }
-
-        /* Section Header */
-        .section-header {
-            margin: 30px 0 20px;
-            position: relative;
-            padding-left: 15px;
-            border-left: 4px solid #375a7f;
-        }
-
-        .section-header h3 {
-            margin: 0;
-            font-size: 1.3rem;
-            font-weight: 700;
-            color: #2c3e50;
-        }
-
-        .section-header p {
-            margin: 5px 0 0;
-            font-size: 0.85rem;
-            color: #6c757d;
-        }
-
-        /* Council Cards */
-        .council-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-
-        .council-card {
-            background: white;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            transition: all 0.3s ease;
-        }
-
-        .council-card:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 20px rgba(55,90,127,0.15);
-        }
-
-        .council-header {
-            background: linear-gradient(135deg, #375a7f, #2c4a6b);
-            padding: 20px;
-            text-align: center;
-            color: white;
-        }
-
-        .council-avatar {
-            width: 80px;
-            height: 80px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 15px;
-            font-size: 2rem;
-            font-weight: 600;
-        }
-
-        .council-name {
-            font-size: 1.1rem;
-            font-weight: 700;
-            margin-bottom: 5px;
-        }
-
-        .council-position {
-            font-size: 0.85rem;
-            opacity: 0.9;
-        }
-
-        .council-body {
-            padding: 20px;
-        }
-
-        .council-detail {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-bottom: 10px;
-            font-size: 0.85rem;
-            color: #6c757d;
-        }
-
-        .council-detail i {
-            width: 20px;
-            color: #375a7f;
-        }
-
-        /* Rules Section */
-        .rules-section {
-            background: white;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            margin-bottom: 30px;
-        }
-
-        .rules-header {
-            background: linear-gradient(135deg, #dc3545, #c82333);
-            padding: 20px;
-            color: white;
-        }
-
-        .rules-header h4 {
-            margin: 0;
-            font-weight: 700;
-        }
-
-        .rules-header p {
-            margin: 5px 0 0;
-            opacity: 0.9;
-            font-size: 0.85rem;
-        }
-
-        .rules-body {
-            padding: 25px;
-        }
-
-        .rule-category {
-            margin-bottom: 25px;
-        }
-
-        .rule-category h5 {
-            color: #2c3e50;
-            font-weight: 700;
-            margin-bottom: 15px;
-            padding-bottom: 8px;
-            border-bottom: 2px solid #e9ecef;
-        }
-
-        .rule-list {
-            list-style: none;
-            padding: 0;
-        }
-
-        .rule-list li {
-            padding: 8px 0;
-            display: flex;
-            align-items: flex-start;
-            gap: 10px;
-            border-bottom: 1px solid #f0f0f0;
-        }
-
-        .rule-list li i {
-            color: #dc3545;
-            margin-top: 3px;
-        }
-
-        .benefit-table {
-            width: 100%;
-            margin-top: 15px;
-        }
-
-        .benefit-table th,
-        .benefit-table td {
-            padding: 8px 12px;
-            border: 1px solid #dee2e6;
-        }
-
-        .benefit-table th {
-            background: #f8f9fa;
-            font-weight: 600;
-        }
-
-        /* Timeline */
-        .timeline {
-            position: relative;
-            padding-left: 30px;
-            margin: 20px 0;
-        }
-
-        .timeline-item {
-            position: relative;
-            padding-bottom: 25px;
-            border-left: 2px solid #e9ecef;
-            padding-left: 20px;
-            margin-left: 10px;
-        }
-
-        .timeline-item::before {
-            content: '';
-            position: absolute;
-            left: -7px;
-            top: 0;
-            width: 12px;
-            height: 12px;
-            border-radius: 50%;
-            background: #375a7f;
-        }
-
-        .timeline-year {
-            font-weight: 700;
-            color: #375a7f;
-            margin-bottom: 5px;
-        }
-
-        .timeline-title {
-            font-weight: 600;
-            margin-bottom: 5px;
-        }
-
-        /* Contact Section */
-        .contact-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            margin-bottom: 20px;
-        }
-
-        .contact-card {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            text-align: center;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        }
-
-        .contact-icon {
-            width: 50px;
-            height: 50px;
-            background: rgba(55,90,127,0.1);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 15px;
-        }
-
-        .contact-icon i {
-            font-size: 1.5rem;
-            color: #375a7f;
-        }
-
-        .contact-title {
-            font-weight: 700;
-            margin-bottom: 10px;
-        }
-
-        .contact-text {
-            font-size: 0.85rem;
-            color: #6c757d;
-        }
-
-        @media (max-width: 768px) {
-            .mv-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .hero-title {
-                font-size: 1.5rem;
-            }
-            
-            .council-grid {
-                grid-template-columns: 1fr;
-            }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=2.0, user-scalable=yes">
+<title>Beneficiary — <?php echo defined('APP_NAME') ? APP_NAME : 'NHGL'; ?></title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   TOKENS (Matches Dashboard/Profile)
+============================================================ */
+:root{
+    --brand-900:#1e3a5a;--brand-800:#162d47;--brand-700:#234c76;--brand-600:#2d5f92;
+    --brand-500:#3d7ab8;--brand-100:#e8f0f8;--brand-50:#f4f8fc;
+    --yellow-accent:#fbbf24;--yellow-dark:#b45309;--yellow-100:#fef3c7;
+    --success-700:#14532d;--success-500:#16a34a;--success-100:#dcfce7;
+    --danger-700:#7f1d1d;--danger-500:#dc2626;--danger-100:#fee2e2;
+    --warning-700:#78350f;--warning-500:#d97706;--warning-100:#fef3c7;
+    --ink-900:#1e2b3c;--ink-700:#334155;--ink-500:#64748b;--ink-400:#94a3b8;--ink-300:#cbd5e1;
+    --line:#e2e8f0;--line-soft:#eef2f7;--paper:#f4f7fc;--surface:#ffffff;
+    --radius-sm:10px;--radius:14px;--radius-lg:18px;
+    --shadow-sm:0 2px 8px rgba(16,24,40,0.07);
+    --shadow-md:0 4px 14px rgba(16,24,40,0.08);
+    --shadow-lg:0 10px 26px rgba(16,24,40,0.10);
+}
+*{box-sizing:border-box}
+html{font-size:18px}
+body{
+    background:var(--paper);
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-size:1rem;line-height:1.6;color:var(--ink-900);
+    margin:0;padding:0;min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+}
+
+/* ============================================================
+   APP HEADER
+============================================================ */
+.app-header{
+    background:var(--surface);border-bottom:1px solid var(--line);
+    padding:0.85rem 1rem;display:flex;align-items:center;justify-content:space-between;
+    gap:12px;position:sticky;top:0;z-index:50;box-shadow:var(--shadow-sm);
+}
+.app-brand{display:flex;align-items:center;gap:10px;min-width:0}
+.app-brand .logo-wrap{
+    width:44px;height:44px;border-radius:10px;background:var(--brand-900);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:900;font-size:1rem;flex-shrink:0;overflow:hidden;
+}
+.app-brand .logo-wrap img{width:100%;height:100%;object-fit:contain;background:#fff;padding:4px}
+.app-brand .brand-text{display:flex;flex-direction:column;line-height:1.15;min-width:0}
+.app-brand .brand-name{font-weight:800;font-size:1rem;color:var(--ink-900)}
+.app-brand .brand-sub{font-size:0.7rem;color:var(--ink-500);font-weight:500;line-height:1.2}
+.header-actions{display:flex;gap:8px;flex-shrink:0}
+.icon-btn{
+    width:44px;height:44px;border-radius:10px;background:var(--paper);border:1px solid var(--line);
+    color:var(--ink-700);display:inline-flex;align-items:center;justify-content:center;
+    cursor:pointer;transition:all 0.15s;text-decoration:none;
+}
+.icon-btn:hover{background:var(--brand-50);border-color:var(--brand-500);color:var(--brand-700)}
+.icon-btn svg{width:20px;height:20px}
+
+/* ============================================================
+   MAIN LAYOUT
+============================================================ */
+.main{max-width:720px;margin:0 auto;padding:1.25rem 1rem 6rem}
+
+/* Alerts */
+.alert{
+    border-radius:var(--radius);padding:0.85rem 1rem;margin-bottom:0.9rem;font-weight:600;
+    display:flex;align-items:flex-start;gap:10px;font-size:0.9rem;line-height:1.5;
+}
+.alert.alert-success{background:var(--success-100);border:2px solid #86efac;color:var(--success-700)}
+.alert.alert-danger{background:var(--danger-100);border:2px solid #fca5a5;color:var(--danger-700)}
+
+/* Cards */
+.card{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-lg);
+    overflow:hidden;box-shadow:var(--shadow-sm);margin-bottom:1rem;
+}
+.card-header{
+    background:var(--brand-50);border-bottom:1px solid var(--line);padding:0.85rem 1rem;
+    display:flex;align-items:center;gap:10px;
+}
+.card-header h2{font-size:0.95rem;font-weight:800;color:var(--ink-900);margin:0;display:flex;align-items:center;gap:8px}
+.card-header h2 svg{color:var(--brand-600);width:18px;height:18px}
+.card-body{padding:1rem}
+
+/* Current Beneficiary */
+.current-box{
+    background:linear-gradient(135deg,var(--brand-800) 0%,var(--brand-600) 100%);
+    color:#fff;padding:1.5rem 1rem;text-align:center;border-radius:var(--radius-sm);
+}
+.current-avatar{
+    width:64px;height:64px;border-radius:50%;background:rgba(255,255,255,0.15);
+    border:2px solid rgba(255,255,255,0.3);margin:0 auto 0.75rem;
+    display:flex;align-items:center;justify-content:center;
+}
+.current-avatar svg{width:32px;height:32px;color:var(--yellow-accent)}
+.current-name{font-size:1.15rem;font-weight:800;margin-bottom:4px}
+.current-rel{font-size:0.85rem;color:var(--yellow-accent);font-weight:700;text-transform:uppercase;letter-spacing:0.05em}
+.current-details{margin-top:1rem;font-size:0.85rem;color:rgba(255,255,255,0.9);display:flex;flex-direction:column;gap:6px}
+
+.empty-box{
+    text-align:center;padding:2rem 1rem;border:2px dashed var(--line);border-radius:var(--radius-sm);
+}
+.empty-box svg{width:36px;height:36px;color:var(--ink-300);margin-bottom:8px}
+.empty-box p{margin:0;font-size:0.9rem;color:var(--ink-500);font-weight:600}
+
+/* Benefit Panel */
+.benefit-block{text-align:center;padding-bottom:1rem;border-bottom:1px solid var(--line);margin-bottom:1rem}
+.benefit-lbl{font-size:0.75rem;font-weight:800;color:var(--ink-500);text-transform:uppercase;margin-bottom:4px}
+.benefit-val{font-size:2rem;font-weight:900;color:var(--brand-700);line-height:1.1}
+.benefit-years{font-size:0.85rem;color:var(--ink-500);margin-top:4px;font-weight:600}
+.benefit-row{display:flex;justify-content:space-between;font-size:0.9rem;color:var(--ink-700);padding:0.5rem 0;border-bottom:1px dashed var(--line-soft)}
+.benefit-row:last-child{border-bottom:none}
+.benefit-row.total{font-weight:800;color:var(--ink-900);font-size:1.05rem;border-top:2px solid var(--line);margin-top:0.5rem;padding-top:0.75rem}
+
+/* Forms */
+.form-group{margin-bottom:1rem}
+.form-label{display:block;font-size:0.8rem;font-weight:800;color:var(--ink-500);text-transform:uppercase;margin-bottom:6px}
+.form-control, .form-select{
+    width:100%;border:1px solid var(--line);border-radius:var(--radius-sm);
+    padding:0.75rem 1rem;font-size:0.95rem;font-family:inherit;background:var(--surface);
+    color:var(--ink-900);outline:none;transition:all 0.15s;
+}
+.form-control:focus, .form-select:focus{border-color:var(--brand-500);box-shadow:0 0 0 3px rgba(61,122,184,0.15)}
+.form-control:disabled{background:var(--paper);color:var(--ink-400)}
+.btn-submit{
+    background:var(--yellow-accent);color:var(--brand-900);border:none;padding:0.85rem 1rem;
+    border-radius:var(--radius);font-size:0.95rem;font-weight:800;font-family:inherit;cursor:pointer;
+    transition:all 0.18s;width:100%;display:inline-flex;align-items:center;justify-content:center;gap:8px;
+    min-height:48px;margin-top:0.5rem;
+}
+.btn-submit:hover:not(:disabled){transform:translateY(-2px);box-shadow:0 4px 12px rgba(251,191,36,0.4)}
+.btn-submit:disabled{opacity:0.6;cursor:not-allowed}
+
+/* Pending Notice */
+.pending-notice{
+    background:var(--warning-100);border:1px solid #fcd34d;border-radius:var(--radius-sm);
+    padding:1rem;margin-bottom:1rem;font-size:0.85rem;color:var(--warning-700);line-height:1.5;
+}
+.pending-notice strong{display:block;font-weight:800;margin-bottom:4px}
+
+/* Rules Box */
+.rules-box{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius-lg);overflow:hidden;box-shadow:var(--shadow-sm);margin-bottom:1rem}
+.rule-item{padding:1rem;border-bottom:1px dashed var(--line)}
+.rule-item:last-child{border-bottom:none}
+.rule-item h4{font-size:0.9rem;font-weight:800;color:var(--ink-900);margin:0 0 6px;display:flex;align-items:center;gap:8px}
+.rule-item h4 svg{width:16px;height:16px;color:var(--brand-600)}
+.rule-item p{font-size:0.85rem;color:var(--ink-700);margin:0;line-height:1.5}
+.rule-item ul{margin:0;padding-left:1.2rem;font-size:0.85rem;color:var(--ink-700);line-height:1.5}
+.rule-item li{margin-bottom:4px}
+.rule-item li:last-child{margin-bottom:0}
+
+/* Bottom Nav (Emoji) */
+.bottom-nav{
+    position:fixed;bottom:0;left:0;right:0;background:var(--surface);border-top:1px solid var(--line);
+    display:flex;z-index:60;box-shadow:0 -4px 14px rgba(16,24,40,0.06);
+}
+.bottom-nav .nav-item{
+    flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:3px;
+    padding:10px 4px 12px;text-decoration:none;color:var(--ink-500);
+    font-size:0.72rem;font-weight:600;transition:color 0.15s;min-height:64px;
+}
+.bottom-nav .nav-item.active{color:var(--brand-700)}
+.bottom-nav .nav-item .icon{font-size:1.35rem;line-height:1;font-weight:900}
+
+@media (min-width:700px){
+    .main{padding-bottom:2rem}
+    .bottom-nav{position:static;max-width:720px;margin:0 auto 2rem;border-radius:var(--radius);border:1px solid var(--line);box-shadow:var(--shadow-sm)}
+}
+@media (max-width:540px){
+    html{font-size:17px}
+    .main{padding:0.85rem 0.75rem 6rem}
+    .app-brand .brand-sub{display:none}
+}
+</style>
 </head>
 <body>
-    <div id="wrapper">
-        <!-- Sidebar -->
-        <div id="sidebar-wrapper">
-            <div class="sidebar-heading">
-                <img src="../assets/images/harana-logo.png" alt="Harana" onerror="this.src=''; this.onerror=null; this.innerHTML='Harana';">
-                <span>Harana</span>
-                <button class="menu-toggle" id="menuToggle">
-                    <i class="fas fa-bars"></i>
-                </button>
-            </div>
-            <div class="list-group list-group-flush mt-2">
-                <a href="dashboard.php" class="list-group-item"><i class="fas fa-tachometer-alt"></i><span>Dashboard</span></a>
-                <a href="profile.php" class="list-group-item"><i class="fas fa-user"></i><span>My Profile</span></a>
-                <a href="payments.php" class="list-group-item"><i class="fas fa-credit-card"></i><span>Payment History</span></a>
-                <a href="beneficiary.php" class="list-group-item"><i class="fas fa-heart"></i><span>Beneficiary</span></a>
-                <a href="notifications.php" class="list-group-item"><i class="fas fa-bell"></i><span>Notifications</span></a>
-                <a href="organization.php" class="list-group-item active"><i class="fas fa-building"></i><span>Organization</span></a>
-                <a href="support.php" class="list-group-item"><i class="fas fa-life-ring"></i><span>Support</span></a>
-                <a href="../logout.php" class="list-group-item" onclick="return confirm('Are you sure?');"><i class="fas fa-sign-out-alt"></i><span>Logout</span></a>
-            </div>
+
+<header class="app-header">
+    <div class="app-brand">
+        <div class="logo-wrap">
+            <img src="../assets/images/harana-logo.png" alt="NHGL" onerror="this.style.display='none';this.parentNode.textContent='NH';">
         </div>
+        <div class="brand-text">
+            <span class="brand-name">NHGL</span>
+            <span class="brand-sub">Nagkaisang Haranista</span>
+        </div>
+    </div>
+    <div class="header-actions">
+        <a href="dashboard.php" class="icon-btn" aria-label="Home">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+        </a>
+    </div>
+</header>
 
-        <!-- Main Content -->
-        <div id="page-content-wrapper">
-            <?php 
-            $page_title = 'Organization';
-            include '../includes/header.php'; 
-            ?>
+<main class="main">
+    <?php if ($message): ?>
+        <div class="alert alert-success">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:20px;height:20px;flex-shrink:0;"><polyline points="20 6 9 17 4 12"/></svg>
+            <span><?php echo htmlspecialchars($message); ?></span>
+        </div>
+    <?php endif; ?>
+    <?php if ($error): ?>
+        <div class="alert alert-danger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:20px;height:20px;flex-shrink:0;"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span><?php echo htmlspecialchars($error); ?></span>
+        </div>
+    <?php endif; ?>
 
-            <div class="organization-container">
-                <!-- Hero Section -->
-                <div class="hero-section">
-                    <div class="hero-title">
-                        Nagkaisang Haranista<br>sa Gintong Luzon Phils, Inc.
+    <!-- Current Beneficiary -->
+    <div class="card">
+        <div class="card-header">
+            <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg> Current Beneficiary</h2>
+        </div>
+        <div class="card-body">
+            <?php if (empty($member['beneficiary_name'])): ?>
+                <div class="empty-box">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+                    <p>No beneficiary designated yet.</p>
+                </div>
+            <?php else: ?>
+                <div class="current-box">
+                    <div class="current-avatar">
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
                     </div>
-                    <div class="hero-subtitle">
-                        Building a community of mutual support, financial security, and shared prosperity.<br>
-                        <span class="badge bg-light text-dark mt-2">Sec. REG No. CN 700172104 | Est. 2024</span>
+                    <div class="current-name"><?php echo htmlspecialchars($member['beneficiary_name']); ?></div>
+                    <div class="current-rel"><?php echo htmlspecialchars($member['beneficiary_relation']); ?></div>
+                    <div class="current-details">
+                        <?php if (!empty($member['beneficiary_age'])): ?>
+                            <span>Age: <?php echo htmlspecialchars($member['beneficiary_age']); ?></span>
+                        <?php endif; ?>
+                        <?php if (!empty($member['beneficiary_contact'])): ?>
+                            <span>Contact: <?php echo htmlspecialchars($member['beneficiary_contact']); ?></span>
+                        <?php endif; ?>
+                        <?php if (!empty($member['beneficiary_address'])): ?>
+                            <span><?php echo htmlspecialchars($member['beneficiary_address']); ?></span>
+                        <?php endif; ?>
                     </div>
                 </div>
+            <?php endif; ?>
+        </div>
+    </div>
 
-                <!-- Statistics -->
-                <div class="stats-grid">
-                    <div class="stat-card">
-                        <div class="stat-icon">
-                            <i class="fas fa-users"></i>
-                        </div>
-                        <div class="stat-number"><?php echo number_format($total_members); ?></div>
-                        <div class="stat-label">Active Members</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-icon">
-                            <i class="fas fa-map-marker-alt"></i>
-                        </div>
-                        <div class="stat-number"><?php echo number_format($total_chapters); ?></div>
-                        <div class="stat-label">Chapters Nationwide</div>
-                    </div>
-                    <div class="stat-card">
-                        <div class="stat-icon">
-                            <i class="fas fa-hand-holding-usd"></i>
-                        </div>
-                        <div class="stat-number">₱<?php echo number_format($total_paid / 1000000, 1); ?>M</div>
-                        <div class="stat-label">Total Assistance Released</div>
-                    </div>
-                </div>
-
-                <!-- Mission & Vision -->
-                <div class="mv-grid">
-                    <div class="mission-card">
-                        <div class="mv-icon">
-                            <i class="fas fa-bullseye"></i>
-                        </div>
-                        <div class="mv-title">Our Mission</div>
-                        <div class="mv-text">
-                            To provide accessible financial assistance and support to our members, fostering a community of mutual help, financial wellness, and sustainable growth for all Haranistas.
-                        </div>
-                        <div class="mt-3">
-                            <i class="fas fa-quote-left me-2"></i> We serve with integrity, compassion, and excellence.
-                        </div>
-                    </div>
-                    <div class="vision-card">
-                        <div class="mv-icon">
-                            <i class="fas fa-eye"></i>
-                        </div>
-                        <div class="mv-title">Our Vision</div>
-                        <div class="mv-text">
-                            A thriving community where every member achieves financial security, experiences mutual support, and contributes to the collective prosperity of all Haranistas.
-                        </div>
-                        <div class="mt-3">
-                            <i class="fas fa-star me-2"></i> Building dreams together.
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Core Values -->
-                <div class="section-header">
-                    <h3><i class="fas fa-gem me-2"></i>Our Core Values</h3>
-                    <p>The principles that guide our organization</p>
-                </div>
-                <div class="core-values-grid">
-                    <div class="core-value-card">
-                        <div class="core-value-icon">
-                            <i class="fas fa-handshake"></i>
-                        </div>
-                        <div class="core-value-title">Mutual Help</div>
-                        <div class="core-value-text">Bayanihan spirit - helping each other succeed</div>
-                    </div>
-                    <div class="core-value-card">
-                        <div class="core-value-icon">
-                            <i class="fas fa-shield-alt"></i>
-                        </div>
-                        <div class="core-value-title">Financial Security</div>
-                        <div class="core-value-text">Building stable financial futures for members</div>
-                    </div>
-                    <div class="core-value-card">
-                        <div class="core-value-icon">
-                            <i class="fas fa-heart"></i>
-                        </div>
-                        <div class="core-value-title">Compassion</div>
-                        <div class="core-value-text">Caring for members in times of need</div>
-                    </div>
-                    <div class="core-value-card">
-                        <div class="core-value-icon">
-                            <i class="fas fa-chart-line"></i>
-                        </div>
-                        <div class="core-value-title">Sustainable Growth</div>
-                        <div class="core-value-text">Growing together for a better tomorrow</div>
-                    </div>
-                </div>
-
-                <!-- Council Members -->
-                <div class="section-header">
-                    <h3><i class="fas fa-user-tie me-2"></i>Council of Leaders</h3>
-                    <p>Meet the dedicated leaders guiding our organization</p>
-                </div>
-                <div class="council-grid">
-                    <?php if (empty($council_members)): ?>
-                        <div class="council-card">
-                            <div class="council-header">
-                                <div class="council-avatar">
-                                    <i class="fas fa-user-tie"></i>
-                                </div>
-                                <div class="council-name">Council Member</div>
-                                <div class="council-position">Coming Soon</div>
-                            </div>
-                            <div class="council-body">
-                                <div class="council-detail">
-                                    <i class="fas fa-info-circle"></i>
-                                    <span>Council member information will be updated soon.</span>
-                                </div>
-                            </div>
-                        </div>
-                    <?php else: ?>
-                        <?php foreach ($council_members as $council): ?>
-                        <div class="council-card">
-                            <div class="council-header">
-                                <div class="council-avatar">
-                                    <?php 
-                                    $initials = '';
-                                    $name_parts = explode(' ', $council['full_name'] ?? $council['first_name'] . ' ' . $council['last_name']);
-                                    foreach ($name_parts as $part) {
-                                        if (!empty($part)) $initials .= strtoupper(substr($part, 0, 1));
-                                    }
-                                    echo $initials ?: 'CM';
-                                    ?>
-                                </div>
-                                <div class="council-name"><?php echo htmlspecialchars($council['full_name'] ?? $council['first_name'] . ' ' . $council['last_name']); ?></div>
-                                <div class="council-position"><?php echo htmlspecialchars($council['position']); ?></div>
-                            </div>
-                            <div class="council-body">
-                                <?php if (!empty($council['contact_number'])): ?>
-                                <div class="council-detail">
-                                    <i class="fas fa-phone-alt"></i>
-                                    <span><?php echo htmlspecialchars($council['contact_number']); ?></span>
-                                </div>
-                                <?php endif; ?>
-                                <?php if (!empty($council['email'])): ?>
-                                <div class="council-detail">
-                                    <i class="fas fa-envelope"></i>
-                                    <span><?php echo htmlspecialchars($council['email']); ?></span>
-                                </div>
-                                <?php endif; ?>
-                                <?php if (!empty($council['term_start'])): ?>
-                                <div class="council-detail">
-                                    <i class="fas fa-calendar-alt"></i>
-                                    <span>Term: <?php echo date('Y', strtotime($council['term_start'])); ?> - <?php echo date('Y', strtotime($council['term_end'] ?? '+4 years')); ?></span>
-                                </div>
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                        <?php endforeach; ?>
-                    <?php endif; ?>
-                </div>
-
-                <!-- Rules & Regulations -->
-                <div class="rules-section">
-                    <div class="rules-header">
-                        <h4><i class="fas fa-gavel me-2"></i>NHGL-Philippines Inc. Rules & Regulations</h4>
-                        <p>Revised 2022 - Approved by the Board of Directors</p>
-                    </div>
-                    <div class="rules-body">
-                        <div class="row">
-                            <div class="col-md-6">
-                                <div class="rule-category">
-                                    <h5><i class="fas fa-user-plus me-2"></i>Membership Requirements</h5>
-                                    <ul class="rule-list">
-                                        <li><i class="fas fa-check-circle text-success"></i> Personal appearance required</li>
-                                        <li><i class="fas fa-file-alt"></i> Application form with data and signature</li>
-                                        <li><i class="fas fa-stethoscope"></i> Medical certificate (original copy)</li>
-                                        <li><i class="fas fa-birthday-cake"></i> Birth certificate copy (45 y/o and above)</li>
-                                        <li><i class="fas fa-money-bill"></i> Membership fee: ₱100.00 + ID fee: ₱100.00</li>
-                                        <li><i class="fas fa-id-card"></i> ID and S.A.C.E. fee: ₱60.00</li>
-                                        <li><i class="fas fa-calendar-alt"></i> Age requirement: 10-60 years old for regular member</li>
-                                    </ul>
-                                </div>
-                                
-                                <div class="rule-category">
-                                    <h5><i class="fas fa-chart-line me-2"></i>Death Benefit Scale</h5>
-                                    <table class="benefit-table">
-                                        <tr><th>Years of Membership</th><th>Benefit Amount</th></tr>
-                                        <tr><td>1-2 years</td><td>₱80,000.00</td></tr>
-                                        <tr><td>3-4 years</td><td>₱90,000.00</td></tr>
-                                        <tr><td>5-6 years</td><td>₱100,000.00</td></tr>
-                                        <tr><td>7-8 years</td><td>₱110,000.00</td></tr>
-                                        <tr><td>9 years</td><td>₱115,000.00</td></tr>
-                                        <tr><td>10 years</td><td>₱120,000.00</td></tr>
-                                        <tr><td>11 years</td><td>₱125,000.00</td></tr>
-                                        <tr><td>12 years</td><td>₱130,000.00</td></tr>
-                                        <tr><td>13 years</td><td>₱135,000.00</td></tr>
-                                        <tr><td>14 years</td><td>₱140,000.00</td></tr>
-                                        <tr><td>15 years</td><td>₱145,000.00</td></tr>
-                                        <tr><td>16+ years</td><td>₱150,000.00</td></tr>
-                                    </table>
-                                </div>
-                            </div>
-                            
-                            <div class="col-md-6">
-                                <div class="rule-category">
-                                    <h5><i class="fas fa-plus-circle me-2"></i>Additional Benefits</h5>
-                                    <ul class="rule-list">
-                                        <li><i class="fas fa-car-crash"></i> <strong>Accidental Death:</strong> Additional ₱10,000.00</li>
-                                        <li><i class="fas fa-star"></i> <strong>Good Payer (5 years no missed payments):</strong> Additional ₱5,000.00</li>
-                                        <li><i class="fas fa-hand-holding-heart"></i> <strong>Donation for members under 18 months:</strong> Based on membership duration</li>
-                                    </ul>
-                                </div>
-                                
-                                <div class="rule-category">
-                                    <h5><i class="fas fa-minus-circle me-2"></i>Deductions & Adjustments</h5>
-                                    <ul class="rule-list">
-                                        <li><strong>1-10 missed payments:</strong> Deduct ₱2,500.00</li>
-                                        <li><strong>11-25 missed payments:</strong> Deduct ₱5,000.00</li>
-                                        <li><strong>26-50 missed payments:</strong> Deduct ₱10,000.00</li>
-                                        <li><strong>51-70 missed payments:</strong> Half of death benefit</li>
-                                        <li><strong>71+ missed payments:</strong> Donation based on membership duration</li>
-                                    </ul>
-                                </div>
-                                
-                                <div class="rule-category">
-                                    <h5><i class="fas fa-clock me-2"></i>Probation Period</h5>
-                                    <ul class="rule-list">
-                                        <li><strong>51-100 missed payments:</strong> 1 month probation</li>
-                                        <li><strong>101-150 missed payments:</strong> 2 months probation</li>
-                                        <li><strong>150+ missed payments:</strong> Possible termination of membership</li>
-                                    </ul>
-                                </div>
-                                
-                                <div class="alert alert-warning mt-3">
-                                    <i class="fas fa-exclamation-triangle me-2"></i>
-                                    <strong>Important Notes:</strong>
-                                    <ul class="mt-2 mb-0">
-                                        <li>Dual membership (member of other organizations) not eligible for full benefits</li>
-                                        <li>Any outstanding balance will be deducted from death benefits</li>
-                                        <li>Benefits only given to legitimate beneficiary or authorized representative</li>
-                                    </ul>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- History Timeline -->
-                <div class="section-header">
-                    <h3><i class="fas fa-history me-2"></i>Our Journey</h3>
-                    <p>The story of Harana Financial System</p>
-                </div>
-                <div class="timeline">
-                    <div class="timeline-item">
-                        <div class="timeline-year">2024</div>
-                        <div class="timeline-title">Official Registration</div>
-                        <div class="timeline-text text-muted">NHGL, Inc. officially registered under Sec. REG No. CN 700172104, marking the formal establishment of our organization.</div>
-                    </div>
-                    <div class="timeline-item">
-                        <div class="timeline-year">2025</div>
-                        <div class="timeline-title">First 500 Members</div>
-                        <div class="timeline-text text-muted">Reached 500 active members across multiple chapters in Luzon, expanding our reach and impact.</div>
-                    </div>
-                    <div class="timeline-item">
-                        <div class="timeline-year">2026</div>
-                        <div class="timeline-title">Digital Transformation</div>
-                        <div class="timeline-text text-muted">Launched the Harana Financial Management System, bringing modern digital services to all members.</div>
-                    </div>
-                    <div class="timeline-item">
-                        <div class="timeline-year">2027+</div>
-                        <div class="timeline-title">Vision 2030</div>
-                        <div class="timeline-text text-muted">Aiming to reach 10,000 members nationwide and establish comprehensive member benefits program.</div>
-                    </div>
-                </div>
-
-                <!-- Contact Information -->
-                <div class="section-header">
-                    <h3><i class="fas fa-address-card me-2"></i>Contact Information</h3>
-                    <p>Get in touch with us</p>
-                </div>
-                <div class="contact-grid">
-                    <div class="contact-card">
-                        <div class="contact-icon">
-                            <i class="fas fa-map-marker-alt"></i>
-                        </div>
-                        <div class="contact-title">Address</div>
-                        <div class="contact-text">
-                            MF 2024, Brgy. Singalat<br>
-                            Palayan City, Nueva Ecija<br>
-                            Philippines
-                        </div>
-                    </div>
-                    <div class="contact-card">
-                        <div class="contact-icon">
-                            <i class="fas fa-phone-alt"></i>
-                        </div>
-                        <div class="contact-title">Contact Numbers</div>
-                        <div class="contact-text">
-                            Tel: (044) 940-6708<br>
-                            Mobile: 0917 123 4567
-                        </div>
-                    </div>
-                    <div class="contact-card">
-                        <div class="contact-icon">
-                            <i class="fas fa-envelope"></i>
-                        </div>
-                        <div class="contact-title">Email</div>
-                        <div class="contact-text">
-                            info@harana.org.ph<br>
-                            support@harana.org.ph
-                        </div>
-                    </div>
-                    <div class="contact-card">
-                        <div class="contact-icon">
-                            <i class="fas fa-clock"></i>
-                        </div>
-                        <div class="contact-title">Office Hours</div>
-                        <div class="contact-text">
-                            Mon-Fri: 8:00 AM - 5:00 PM<br>
-                            Sat: 8:00 AM - 12:00 PM<br>
-                            Sun: Closed
-                        </div>
-                    </div>
-                </div>
+    <!-- Death Benefit -->
+    <div class="card">
+        <div class="card-header">
+            <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg> Estimated Death Benefit</h2>
+        </div>
+        <div class="card-body">
+            <div class="benefit-block">
+                <div class="benefit-lbl">Total Estimated Benefit</div>
+                <div class="benefit-val">₱<?php echo number_format($total_benefit, 2); ?></div>
+                <div class="benefit-years">Based on <?php echo $years_as_member; ?> year<?php echo $years_as_member == 1 ? '' : 's'; ?> of membership</div>
+            </div>
+            <div class="benefit-row">
+                <span>Base Benefit (<?php echo $years_as_member; ?> yr)</span>
+                <span>₱<?php echo number_format($base_benefit, 2); ?></span>
+            </div>
+            <div class="benefit-row">
+                <span>Accidental Death Bonus</span>
+                <span>₱<?php echo number_format($accident_bonus, 2); ?></span>
+            </div>
+            <div class="benefit-row">
+                <span>Good Payer Bonus</span>
+                <span>₱<?php echo number_format($good_payer_bonus, 2); ?></span>
+            </div>
+            <div class="benefit-row total">
+                <span>Total</span>
+                <span>₱<?php echo number_format($total_benefit, 2); ?></span>
             </div>
         </div>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        // Sidebar Toggle
-        const menuToggle = document.getElementById('menuToggle');
-        const sidebar = document.getElementById('sidebar-wrapper');
-        const headerLogo = document.getElementById('headerLogo');
-        
-        const sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
-        
-        if (sidebarCollapsed) {
-            sidebar.classList.add('collapsed');
-        }
-        
-        if (menuToggle) {
-            menuToggle.addEventListener('click', function() {
-                sidebar.classList.toggle('collapsed');
-                localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed'));
-            });
-        }
+    <!-- Update Form -->
+    <div class="card">
+        <div class="card-header">
+            <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg> Update Beneficiary</h2>
+        </div>
+        <div class="card-body">
+            <?php if ($pending_request): ?>
+                <div class="pending-notice">
+                    <strong>Pending Approval</strong>
+                    Your request to change the beneficiary to <strong><?php echo htmlspecialchars($pending_request['beneficiary_name']); ?></strong> is currently being reviewed.
+                </div>
+            <?php endif; ?>
 
-        // Handle logo fallback
-        const sidebarLogo = document.querySelector('.sidebar-heading img');
-        if (sidebarLogo) {
-            sidebarLogo.onerror = function() {
-                this.style.display = 'none';
-                this.nextSibling.textContent = 'Harana';
-            };
-        }
-        
-        if (headerLogo) {
-            headerLogo.onerror = function() {
-                this.style.display = 'none';
-            };
-        }
-    </script>
+            <form method="POST" enctype="multipart/form-data">
+                <input type="hidden" name="csrf_token" value="<?php echo $csrf_token; ?>">
+                
+                <div class="form-group">
+                    <label class="form-label">Full Name</label>
+                    <input type="text" class="form-control" name="beneficiary_name" value="<?php echo htmlspecialchars($pending_request['beneficiary_name'] ?? $member['beneficiary_name'] ?? ''); ?>" <?php echo $pending_request ? 'disabled' : ''; ?> required>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Relationship</label>
+                    <select class="form-select" name="beneficiary_relation" <?php echo $pending_request ? 'disabled' : ''; ?> required>
+                        <option value="">-- Select --</option>
+                        <?php 
+                        $current_rel = $pending_request['beneficiary_relation'] ?? $member['beneficiary_relation'] ?? '';
+                        $relations = ['Spouse', 'Child', 'Parent', 'Sibling', 'Grandchild', 'Grandparent', 'Relative', 'Legal Dependent'];
+                        foreach ($relations as $rel): ?>
+                            <option value="<?php echo $rel; ?>" <?php echo $current_rel === $rel ? 'selected' : ''; ?>><?php echo $rel; ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;" class="form-group">
+                    <div>
+                        <label class="form-label">Age</label>
+                        <input type="number" class="form-control" name="beneficiary_age" value="<?php echo htmlspecialchars($pending_request['beneficiary_age'] ?? $member['beneficiary_age'] ?? ''); ?>" <?php echo $pending_request ? 'disabled' : ''; ?>>
+                    </div>
+                    <div>
+                        <label class="form-label">Contact</label>
+                        <input type="text" class="form-control" name="beneficiary_contact" value="<?php echo htmlspecialchars($pending_request['beneficiary_contact'] ?? $member['beneficiary_contact'] ?? ''); ?>" <?php echo $pending_request ? 'disabled' : ''; ?>>
+                    </div>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Complete Address</label>
+                    <textarea class="form-control" name="beneficiary_address" rows="2" <?php echo $pending_request ? 'disabled' : ''; ?> required><?php echo htmlspecialchars($pending_request['beneficiary_address'] ?? $member['beneficiary_address'] ?? ''); ?></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label class="form-label">Supporting Documents</label>
+                    <input type="file" class="form-control" name="documents[]" multiple accept="image/*,application/pdf" <?php echo $pending_request ? 'disabled' : ''; ?>>
+                    <span style="font-size:0.75rem; color:var(--ink-500); display:block; margin-top:4px;">Upload proof (Birth/Marriage Cert, Valid ID). Max 5MB per file.</span>
+                </div>
+
+                <button type="submit" name="update_beneficiary" class="btn-submit" <?php echo $pending_request ? 'disabled' : ''; ?>>
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:16px;height:16px;"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+                    <?php echo $pending_request ? 'Request Pending' : 'Submit Request'; ?>
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Rules -->
+    <div class="section-title">Beneficiary Rules</div>
+    <div class="rules-box">
+        <div class="rule-item">
+            <h4><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg> Who Can Be a Beneficiary</h4>
+            <ul>
+                <li>Must be a legitimate family member (spouse, child, parent, legal dependent).</li>
+                <li>Must be between <strong>10 to 60 years old</strong>.</li>
+                <li>Only <strong>ONE (1)</strong> beneficiary can be designated at a time.</li>
+            </ul>
+        </div>
+        <div class="rule-item">
+            <h4><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg> Required Documents</h4>
+            <ul>
+                <li>Birth certificate (for children)</li>
+                <li>Marriage certificate (for spouse)</li>
+                <li>Valid government-issued ID</li>
+            </ul>
+        </div>
+        <div class="rule-item">
+            <h4><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Processing Time</h4>
+            <ul>
+                <li>Reviewed within <strong>3–5 business days</strong>.</li>
+                <li>You will be notified via email/SMS once approved.</li>
+                <li>Only one pending request allowed at a time.</li>
+            </ul>
+        </div>
+    </div>
+</main>
+
+<!-- Bottom Nav (5 Tabs) -->
+<nav class="bottom-nav">
+    <a href="dashboard.php" class="nav-item">
+        <span class="icon">🏠</span>
+        <span>Home</span>
+    </a>
+    <a href="notifications.php" class="nav-item">
+        <span class="icon">🔔</span>
+        <span>Notify</span>
+    </a>
+    <a href="payments.php" class="nav-item">
+        <span class="icon">💳</span>
+        <span>Payments</span>
+    </a>
+    <a href="profile.php" class="nav-item">
+        <span class="icon">👤</span>
+        <span>Profile</span>
+    </a>
+    <a href="support.php" class="nav-item active">
+        <span class="icon">❓</span>
+        <span>Help</span>
+    </a>
+</nav>
 </body>
 </html>

@@ -18,3 +18,15 @@ composer.lock
 Thumbs.db
 *.log
 *.tmp
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Composer dependencies (optional, depends on your workflow)
+# /vendor/
+
+# Uploads
+/uploads/temp/*
+!/uploads/temp/.gitkeep

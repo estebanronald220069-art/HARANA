@@ -21,7 +21,7 @@ body {
 
 /* Sidebar - Full width */
 #sidebar-wrapper {
-    background: #375a7f;
+    background: #1c1c1d;
     color: #fff;
     width: 250px;
     height: 100vh;
@@ -36,9 +36,6 @@ body {
     width: 70px;
 }
 
-#sidebar-wrapper.collapsed .sidebar-heading span {
-    display: none;
-}
 
 #sidebar-wrapper.collapsed .list-group-item span {
     display: none;
@@ -63,32 +60,65 @@ body {
 #sidebar-wrapper.collapsed .sidebar-heading img {
     display: none;
 }
-
+/* ===== SIDEBAR HEADING (dashboard-matching) ===== */
 #sidebar-wrapper .sidebar-heading {
-    padding: 1.2rem 1rem;
-    font-size: 1.4rem;
-    font-weight: 600;
-    letter-spacing: 0.5px;
+    padding: 1rem 1rem .85rem;
+    font-size: 1.1rem;
+    font-weight: 700;
     border-bottom: 1px solid rgba(255,255,255,0.1);
-    background: #375a7f;
+    background: #1c1c1d;
     color: white;
-    text-align: left;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 10px;
+    line-height: 1.15;
+    flex-shrink: 0;
 }
 
+#sidebar-wrapper .sidebar-heading .sidebar-logo {
+    height: 34px;
+    width: 34px;
+    object-fit: contain;
+    flex-shrink: 0;
+    transition: all 0.3s ease;
+}
+
+#sidebar-wrapper .sidebar-heading .brand-text {
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+    flex: 1;
+    min-width: 0;
+}
+
+#sidebar-wrapper .sidebar-heading .brand-text .brand-acronym {
+    font-size: 1.15rem;
+    letter-spacing: .5px;
+    font-weight: 800;
+}
+
+#sidebar-wrapper .sidebar-heading .brand-text .brand-full {
+    font-size: .62rem;
+    font-weight: 400;
+    color: rgba(255,255,255,.7);
+    letter-spacing: .2px;
+    text-transform: uppercase;
+    margin-top: 1px;
+    white-space: normal;
+    line-height: 1.15;
+    max-width: 175px;
+}
+
+/* Collapsed state */
 #sidebar-wrapper.collapsed .sidebar-heading {
     justify-content: center;
-    padding: 1.2rem 0;
+    padding: 1rem 0;
+    gap: 0;
 }
 
-#sidebar-wrapper .sidebar-heading img {
-    height: 30px;
-    width: auto;
-    margin-right: 10px;
-    vertical-align: middle;
-    transition: all 0.3s ease;
+#sidebar-wrapper.collapsed .sidebar-heading .brand-text,
+#sidebar-wrapper.collapsed .sidebar-heading .sidebar-logo {
+    display: none;
 }
 
 .menu-toggle {
@@ -264,7 +294,7 @@ body {
 .search-group .btn-search {
     height: 38px;
     padding: 0 18px;
-    background: #375a7f;
+    background: #1c1c1d;
     color: white;
     border: none;
     border-radius: 8px;
@@ -328,20 +358,45 @@ body {
     gap: 8px;
 }
 
+.filter-actions {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end; /* Aligns buttons nicely if labels are added later */
+}
+
 .filter-actions .btn {
     height: 36px;
     padding: 0 16px;
     font-size: 13px;
     border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px; /* Keeps the icon and text spaced nicely */
+    text-decoration: none; /* Removes underline from <a> tags */
+    line-height: 1;
 }
 
 .filter-actions .btn-primary {
-    background: #375a7f;
-    border: none;
+    background: #1c1c1d;
+    border: 1px solid #1c1c1d;
 }
 
 .filter-actions .btn-primary:hover {
     background: #2c4a6b;
+    border-color: #2c4a6b;
+}
+
+.filter-actions .btn-secondary {
+    background: #6c757d;
+    border: 1px solid #6c757d;
+    color: #fff;
+}
+
+.filter-actions .btn-secondary:hover {
+    background: #5a6268;
+    border-color: #5a6268;
+    color: #fff;
 }
 
 .filter-actions .btn-secondary {
@@ -578,15 +633,111 @@ body {
     box-shadow: 0 6px 16px rgba(220,53,69,0.4);
 }
 
-@keyframes slideUp {
-    from {
-        transform: translateY(100px);
-        opacity: 0;
+
+/* ============================================================ */
+/* DOCUMENTS ATTACHED — header with right-aligned view buttons   */
+/* ============================================================ */
+.documents-section .documents-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+
+.documents-section .documents-section-header h4 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #2c3e50;
+    margin: 0;
+}
+
+.documents-section .doc-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-left: auto;
+}
+
+.documents-section .doc-actions .btn {
+    font-size: 12px;
+    font-weight: 500;
+    padding: 5px 12px;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.documents-section .doc-actions .btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 6px rgba(55, 90, 127, 0.25);
+}
+
+.documents-section .doc-actions .btn i {
+    font-size: 11px;
+}
+
+/* Responsive: stack on narrow screens */
+@media (max-width: 576px) {
+    .documents-section .documents-section-header {
+        flex-direction: column;
+        align-items: flex-start;
     }
-    to {
-        transform: translateY(0);
-        opacity: 1;
+    .documents-section .doc-actions {
+        margin-left: 0;
+        width: 100%;
     }
+    .documents-section .doc-actions .btn {
+        flex: 1;
+        justify-content: center;
+    }
+}
+
+/* ============================================================ */
+/* DOCUMENT VIEWER MODAL                                          */
+/* ============================================================ */
+#documentViewerModal .modal-content {
+    border: none;
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+#documentViewerModal .modal-header {
+    padding: 12px 20px;
+    border-bottom: none;
+}
+
+#documentViewerModal .modal-body {
+    padding: 0;
+    background: #f4f7fc;
+    min-height: 500px;
+    max-height: 80vh;
+    overflow: auto;
+    text-align: center;
+}
+
+#documentViewerModal .modal-body img {
+    display: inline-block;
+    max-width: 100%;
+    height: auto;
+}
+
+#documentViewerModal .modal-body iframe {
+    display: block;
+    width: 100%;
+    border: 0;
+}
+
+#documentViewerModal .modal-footer {
+    padding: 10px 20px;
+    border-top: 1px solid #e9ecef;
+    background: #fff;
+}
+
+#documentViewerModal .modal-footer .btn {
+    font-size: 13px;
 }
 
 /* Modal Styles */
@@ -873,4 +1024,60 @@ body {
         transform: translateY(0);
         opacity: 1;
     }
+}
+/* ============================================================
+   PREVENT COLLAPSE FLASH ON PAGE LOAD
+   ============================================================ */
+html.sidebar-was-collapsed #sidebar-wrapper {
+    width: 70px;
+}
+html.sidebar-was-collapsed #sidebar-wrapper .sidebar-heading .brand-text,
+html.sidebar-was-collapsed #sidebar-wrapper .sidebar-heading .sidebar-logo,
+html.sidebar-was-collapsed #sidebar-wrapper .list-group-item span,
+html.sidebar-was-collapsed #sidebar-wrapper .badge-count {
+    display: none;
+}
+html.sidebar-was-collapsed #sidebar-wrapper .list-group-item {
+    text-align: center;
+    padding: 15px 0;
+}
+html.sidebar-was-collapsed #sidebar-wrapper .list-group-item i {
+    margin-right: 0;
+    width: 100%;
+    text-align: center;
+    font-size: 1.2rem;
+}
+html.sidebar-was-collapsed #sidebar-wrapper .sidebar-heading {
+    justify-content: center;
+    padding: 1rem 0;
+    gap: 0;
+}
+
+/* Once JS re-enables transitions (after first paint) */
+html.sidebar-transitions-on #sidebar-wrapper {
+    transition: width 0.3s ease;
+}
+
+/* ============================================================
+   EDIT DETAILS — selective revert checkboxes
+   ============================================================ */
+#editDetailsContent .change-checkbox,
+#editDetailsContent #selectAllChanges {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: #375a7f;
+}
+
+#editDetailsContent #selectAllChanges {
+    transform: scale(1.1);
+}
+
+#editDetailsContent .change-checkbox:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+}
+
+#editDetailsTable tbody tr:hover {
+    background-color: rgba(55,90,127,0.06);
 }

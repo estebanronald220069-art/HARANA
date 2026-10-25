@@ -1,10 +1,14 @@
 <?php
-// user/payments.php
+// user/payments.php — Phone-first redesign (2026-10)
 require_once '../includes/config.php';
 require_once '../includes/db_connection.php';
 require_once '../includes/security.php';
 require_once '../includes/auth.php';
 require_once '../includes/user_functions.php';
+
+if (!isset($auth) || !($auth instanceof Auth)) {
+    $auth = new Auth();
+}
 
 $auth->requireLogin();
 $current_user = $auth->getCurrentUser();
@@ -12,9 +16,7 @@ $current_user = $auth->getCurrentUser();
 $db = Database::getInstance();
 $member = getUserMemberData($db, $current_user);
 
-// Check if member data exists
 if (!$member || empty($member['member_code'])) {
-    // Try to get member by username if not found
     $member = $db->getSingle(
         "SELECT * FROM members WHERE username = ? OR email = ?",
         [$current_user['username'] ?? '', $current_user['email'] ?? ''],
@@ -22,7 +24,6 @@ if (!$member || empty($member['member_code'])) {
     );
 }
 
-// If still no member, redirect with error
 if (!$member || empty($member['member_code'])) {
     header('Location: dashboard.php?error=member_not_found');
     exit();
@@ -30,48 +31,43 @@ if (!$member || empty($member['member_code'])) {
 
 $member_code = $member['member_code'];
 
-// Pagination
 $page = isset($_GET['page']) ? (int)$_GET['page'] : 1;
+if ($page < 1) $page = 1;
 $limit = 20;
 $offset = ($page - 1) * $limit;
 
-// Get payments using member_code
-$payments = getUserPayments($db, $member_code, $limit, $offset);
-$total_payments = getUserPaymentCount($db, $member_code);
-$total_pages = ceil($total_payments / $limit);
+// FIX: Direct SQL queries to bypass broken getUserPayments() and ensure member_code is used.
+$payments = $db->getAll(
+    "SELECT * FROM payments 
+     WHERE member_code = ? 
+     ORDER BY payment_date DESC, payment_id DESC 
+     LIMIT ? OFFSET ?",
+    [$member_code, $limit, $offset], 'sii'
+);
 
-// Get payment summary
+$total_payments = (int)($db->getSingle(
+    "SELECT COUNT(*) as total FROM payments WHERE member_code = ?",
+    [$member_code], 's'
+)['total'] ?? 0);
+
+$total_pages = $limit > 0 ? ceil($total_payments / $limit) : 1;
+
+// ── Last confirmed payment date ────────────────────────────────
 $payment_summary = $db->getSingle(
-    "SELECT 
-        COUNT(*) as total_count,
-        COALESCE(SUM(amount), 0) as total_amount,
-        MAX(payment_date) as last_payment,
-        MIN(payment_date) as first_payment
-     FROM payments p
-     JOIN members m ON p.member_id = m.member_code
-     WHERE m.member_code = ? AND p.payment_status = 'confirmed'",
+    "SELECT MAX(payment_date) AS last_payment
+     FROM payments
+     WHERE member_code = ? AND payment_status = 'confirmed'",
     [$member_code], 's'
 );
 
-// Get pending payments count
+// ── Pending GCash uploads for this member ──────────────────────
 $pending_count = $db->getSingle(
-    "SELECT COUNT(*) as count FROM payments p
-     JOIN members m ON p.member_id = m.member_code
-     WHERE m.member_code = ? AND p.payment_status = 'pending'",
+    "SELECT COUNT(*) AS count
+     FROM payments
+     WHERE member_code = ? AND payment_status = 'pending'",
     [$member_code], 's'
 )['count'] ?? 0;
 
-// Get payment methods breakdown
-$payment_methods = $db->getAll(
-    "SELECT p.payment_method, COUNT(*) as count, SUM(p.amount) as total
-     FROM payments p
-     JOIN members m ON p.member_id = m.member_code
-     WHERE m.member_code = ? AND p.payment_status = 'confirmed'
-     GROUP BY p.payment_method",
-    [$member_code], 's'
-);
-
-// Get member balance and expected
 $balance = getUserBalance($db, $member_code);
 $months_as_member = calculateMonthsAsMember($member);
 $monthly_contribution = $member['monthly_contribution'] ?? 100;
@@ -79,1025 +75,530 @@ $expected_total = $months_as_member * $monthly_contribution;
 $total_paid = $balance['total_paid'] ?? 0;
 $current_balance = $expected_total - $total_paid;
 
-// Check if user has pending payments
-$has_pending = $pending_count > 0;
+// ---------- Next due date ----------
+$last_payment_date = $payment_summary['last_payment'] ?? $member['date_joined'] ?? date('Y-m-d');
+$next_due_date     = date('Y-m-d', strtotime($last_payment_date . ' +1 month'));
 
+$today          = new DateTime();
+$next_due_obj   = new DateTime($next_due_date);
+$days_until_due = (int)$today->diff($next_due_obj)->format('%r%a');
+$is_overdue     = $days_until_due < 0;
+$is_due_soon    = $days_until_due >= 0 && $days_until_due <= 7;
+
+$has_pending = $pending_count > 0;
 $csrf_token = Security::generateCSRFToken();
 
-// Handle success/error messages from payment page
 $success_message = isset($_GET['success']) ? $_GET['success'] : '';
+$success_text = [
+    'gcash_submitted'  => 'Your GCash payment has been submitted. An administrator will verify your screenshot and reference number shortly. You will receive a notification once confirmed.',
+    'gcash_confirmed'  => 'Your GCash payment has been confirmed.',
+    'payment_submitted'=> 'Your payment has been submitted.',
+][$success_message] ?? null;
 $error_message = isset($_GET['error']) ? $_GET['error'] : '';
+
+$is_admin = ($current_user['role'] === 'admin');
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Pay - <?php echo APP_NAME; ?></title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        /* ===== STYLES (same as before with additions) ===== */
-        :root {
-            --primary-color: #375a7f;
-            --secondary-color: #2c4a6b;
-            --success-color: #28a745;
-            --warning-color: #ffc107;
-            --danger-color: #dc3545;
-            --info-color: #17a2b8;
-            --gcash-color: #00b4d8;
-        }
-
-        * {
-            box-sizing: border-box;
-        }
-
-        body {
-            background: #f4f7fc;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            overflow: hidden;
-            margin: 0;
-            padding: 0;
-        }
-
-        #wrapper {
-            display: flex;
-            width: 100%;
-            height: 100vh;
-            overflow: hidden;
-        }
-
-        /* Sidebar Styles */
-        #sidebar-wrapper {
-            background: #375a7f;
-            color: #fff;
-            width: 250px;
-            height: 100vh;
-            overflow-y: auto;
-            transition: width 0.3s ease;
-            box-shadow: 4px 0 10px rgba(0,0,0,0.1);
-            white-space: nowrap;
-        }
-
-        #sidebar-wrapper.collapsed {
-            width: 70px;
-        }
-
-        #sidebar-wrapper.collapsed .sidebar-heading span {
-            display: none;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item span {
-            display: none;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item i {
-            margin-right: 0;
-            width: 100%;
-            text-align: center;
-            font-size: 1.2rem;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item {
-            padding: 15px 0;
-            text-align: center;
-        }
-
-        #sidebar-wrapper.collapsed .badge {
-            display: none;
-        }
-
-        #sidebar-wrapper.collapsed .sidebar-heading img {
-            display: none;
-        }
-
-        #sidebar-wrapper .sidebar-heading {
-            padding: 1.2rem 1rem;
-            font-size: 1.4rem;
-            font-weight: 600;
-            border-bottom: 1px solid rgba(255,255,255,0.1);
-            background: #375a7f;
-            color: white;
-            text-align: left;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-        }
-
-        #sidebar-wrapper.collapsed .sidebar-heading {
-            justify-content: center;
-            padding: 1.2rem 0;
-        }
-
-        #sidebar-wrapper .sidebar-heading img {
-            height: 30px;
-            width: auto;
-            margin-right: 10px;
-            vertical-align: middle;
-        }
-
-        .menu-toggle {
-            background: transparent;
-            border: none;
-            font-size: 1.5rem;
-            color: white;
-            cursor: pointer;
-            padding: 0 10px;
-            transition: all 0.2s;
-        }
-
-        .menu-toggle:hover {
-            color: #fff;
-            transform: scale(1.1);
-        }
-
-        .header-logo {
-            height: 30px;
-            width: auto;
-            margin-right: 10px;
-            vertical-align: middle;
-            transition: all 0.3s ease;
-            display: none;
-        }
-
-        #sidebar-wrapper.collapsed ~ #page-content-wrapper .header-logo {
-            display: inline-block;
-        }
-
-        #sidebar-wrapper .list-group-item {
-            background: transparent;
-            border: none;
-            color: rgba(255,255,255,0.9);
-            padding: 0.8rem 1.2rem;
-            font-weight: 500;
-            transition: all 0.2s;
-            font-size: 0.95rem;
-            text-align: left;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item {
-            padding: 15px 0;
-            text-align: center;
-        }
-
-        #sidebar-wrapper .list-group-item:hover,
-        #sidebar-wrapper .list-group-item.active {
-            background: rgba(255,255,255,0.15);
-            color: #fff;
-            border-left: 4px solid #fff;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item:hover,
-        #sidebar-wrapper.collapsed .list-group-item.active {
-            border-left: none;
-            border-bottom: 2px solid #fff;
-        }
-
-        #sidebar-wrapper .list-group-item i {
-            width: 24px;
-            text-align: center;
-            margin-right: 10px;
-            font-size: 1rem;
-            transition: all 0.3s ease;
-        }
-
-        #sidebar-wrapper.collapsed .list-group-item i {
-            margin-right: 0;
-            width: 100%;
-            font-size: 1.2rem;
-        }
-
-        #page-content-wrapper {
-            flex: 1;
-            background: #f4f7fc;
-            height: 100vh;
-            overflow-y: auto;
-            padding: 0;
-        }
-
-        /* Navbar */
-        .navbar {
-            background: #fff !important;
-            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
-            padding: 0.7rem 1.2rem;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-        }
-
-        .navbar-left {
-            display: flex;
-            align-items: center;
-        }
-
-        .navbar-brand {
-            font-size: 1.2rem;
-            font-weight: 500;
-            color: #375a7f !important;
-            display: flex;
-            align-items: center;
-        }
-
-        .navbar-brand i {
-            color: #375a7f;
-        }
-
-        .navbar-right {
-            display: flex;
-            align-items: center;
-            gap: 20px;
-        }
-
-        /* Container */
-        .payments-container {
-            padding: 20px;
-            max-width: 1400px;
-            margin: 0 auto;
-        }
-
-        /* GCash Payment Button */
-        .gcash-payment-btn {
-            background: linear-gradient(135deg, #00b4d8, #0077b6);
-            color: white;
-            border: none;
-            padding: 15px 35px;
-            border-radius: 12px;
-            font-size: 1.1rem;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px rgba(0, 180, 216, 0.3);
-            display: inline-flex;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .gcash-payment-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 25px rgba(0, 180, 216, 0.5);
-            color: white;
-        }
-
-        .gcash-payment-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-            transform: none;
-        }
-
-        .gcash-payment-btn i {
-            font-size: 1.5rem;
-        }
-
-        .pending-badge {
-            background: #fff3cd;
-            color: #856404;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.75rem;
-            font-weight: 600;
-            display: inline-block;
-            margin-left: 10px;
-        }
-
-        /* Summary Cards */
-        .summary-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 20px;
-            margin-bottom: 25px;
-        }
-
-        .summary-card {
-            background: white;
-            border-radius: 12px;
-            padding: 20px;
-            text-align: center;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            transition: all 0.3s ease;
-        }
-
-        .summary-card:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0,0,0,0.12);
-        }
-
-        .summary-icon {
-            width: 50px;
-            height: 50px;
-            background: rgba(55,90,127,0.1);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            margin: 0 auto 12px;
-        }
-
-        .summary-icon i {
-            font-size: 1.5rem;
-            color: #375a7f;
-        }
-
-        .summary-number {
-            font-size: 1.8rem;
-            font-weight: 700;
-            color: #2c3e50;
-            margin-bottom: 5px;
-        }
-
-        .summary-label {
-            font-size: 0.75rem;
-            color: #6c757d;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .summary-sub {
-            font-size: 0.7rem;
-            color: #6c757d;
-            margin-top: 5px;
-        }
-
-        /* Balance Card */
-        .balance-card {
-            background: linear-gradient(135deg, #375a7f, #2c4a6b);
-            border-radius: 12px;
-            padding: 20px;
-            margin-bottom: 25px;
-            color: white;
-        }
-
-        .balance-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            flex-wrap: wrap;
-            gap: 15px;
-        }
-
-        .balance-amount {
-            font-size: 1.8rem;
-            font-weight: 700;
-        }
-
-        .balance-status {
-            display: inline-block;
-            padding: 5px 12px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 20px;
-            font-size: 0.75rem;
-        }
-
-        .balance-progress {
-            margin-top: 15px;
-        }
-
-        .progress-bar-custom {
-            height: 8px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 4px;
-            overflow: hidden;
-        }
-
-        .progress-fill {
-            height: 100%;
-            background: #28a745;
-            border-radius: 4px;
-            transition: width 0.3s ease;
-        }
-
-        /* Methods Grid */
-        .methods-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 25px;
-        }
-
-        .method-card {
-            background: white;
-            border-radius: 12px;
-            padding: 15px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        }
-
-        .method-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-bottom: 10px;
-        }
-
-        .method-name {
-            font-weight: 600;
-            color: #2c3e50;
-        }
-
-        .method-badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 4px 12px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-            font-weight: 600;
-        }
-
-        .method-cash {
-            background: #d4edda;
-            color: #155724;
-        }
-
-        .method-gcash {
-            background: #cce5ff;
-            color: #004085;
-        }
-
-        .method-bank_transfer {
-            background: #fff3cd;
-            color: #856404;
-        }
-
-        .method-amount {
-            font-size: 1.2rem;
-            font-weight: 700;
-            color: #28a745;
-        }
-
-        .method-count {
-            font-size: 0.7rem;
-            color: #6c757d;
-        }
-
-        .method-progress {
-            margin-top: 10px;
-            height: 4px;
-            background: #e9ecef;
-            border-radius: 2px;
-            overflow: hidden;
-        }
-
-        .method-progress-fill {
-            height: 100%;
-            background: #375a7f;
-            border-radius: 2px;
-        }
-
-        /* Main Card */
-        .main-card {
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-            overflow: hidden;
-        }
-
-        .card-header-custom {
-            padding: 15px 20px;
-            background: #f8f9fa;
-            border-bottom: 1px solid #e9ecef;
-        }
-
-        .card-header-custom h5 {
-            margin: 0;
-            font-weight: 600;
-            color: #2c3e50;
-            font-size: 1rem;
-        }
-
-        .card-header-custom i {
-            margin-right: 8px;
-            color: #375a7f;
-        }
-
-        /* Table */
-        .table-responsive-custom {
-            overflow-x: auto;
-        }
-
-        .table-custom {
-            width: 100%;
-            margin-bottom: 0;
-        }
-
-        .table-custom th {
-            padding: 12px 15px;
-            background: #f8f9fa;
-            font-size: 0.75rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            color: #6c757d;
-            border-bottom: 2px solid #e9ecef;
-        }
-
-        .table-custom td {
-            padding: 12px 15px;
-            vertical-align: middle;
-            border-bottom: 1px solid #e9ecef;
-            font-size: 0.85rem;
-        }
-
-        .table-custom tr:hover {
-            background: #f8f9fa;
-        }
-
-        .receipt-link {
-            color: #375a7f;
-            text-decoration: none;
-            font-size: 0.8rem;
-        }
-
-        .receipt-link:hover {
-            text-decoration: underline;
-        }
-
-        /* Pagination */
-        .pagination-custom {
-            display: flex;
-            justify-content: center;
-            gap: 5px;
-            margin-top: 20px;
-            padding: 15px;
-        }
-
-        .page-link-custom {
-            padding: 8px 12px;
-            border: 1px solid #dee2e6;
-            border-radius: 6px;
-            color: #375a7f;
-            text-decoration: none;
-            transition: all 0.2s;
-        }
-
-        .page-link-custom:hover {
-            background: #375a7f;
-            color: white;
-            border-color: #375a7f;
-        }
-
-        .page-link-custom.active {
-            background: #375a7f;
-            color: white;
-            border-color: #375a7f;
-        }
-
-        .page-link-custom.disabled {
-            color: #adb5bd;
-            pointer-events: none;
-        }
-
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 50px 20px;
-        }
-
-        .empty-icon {
-            font-size: 4rem;
-            color: #dee2e6;
-            margin-bottom: 15px;
-        }
-
-        /* Badge Styles */
-        .badge-success {
-            background: #d4edda;
-            color: #155724;
-            padding: 4px 8px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-        }
-
-        .badge-pending {
-            background: #fff3cd;
-            color: #856404;
-            padding: 4px 8px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-        }
-
-        .badge-failed {
-            background: #f8d7da;
-            color: #721c24;
-            padding: 4px 8px;
-            border-radius: 20px;
-            font-size: 0.7rem;
-        }
-
-        /* Alert Messages */
-        .alert-custom {
-            border-radius: 12px;
-            padding: 15px 20px;
-            margin-bottom: 20px;
-            animation: slideDown 0.3s ease;
-        }
-
-        @keyframes slideDown {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-
-        /* Responsive */
-        @media (max-width: 768px) {
-            .summary-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .balance-row {
-                flex-direction: column;
-                text-align: center;
-            }
-            
-            .methods-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .table-custom th,
-            .table-custom td {
-                padding: 8px 10px;
-            }
-
-            .gcash-payment-btn {
-                width: 100%;
-                justify-content: center;
-            }
-        }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=2.0, user-scalable=yes">
+<title>Smart Pay — <?php echo defined('APP_NAME') ? APP_NAME : 'NHGL'; ?></title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+/* ============================================================
+   TOKENS
+============================================================ */
+:root{
+    --brand-900:#1e3a5a;--brand-800:#162d47;--brand-700:#234c76;--brand-600:#2d5f92;
+    --brand-500:#3d7ab8;--brand-100:#e8f0f8;--brand-50:#f4f8fc;
+    --yellow-accent:#fbbf24;--yellow-dark:#b45309;--yellow-100:#fef3c7;
+    --success-700:#14532d;--success-500:#16a34a;--success-100:#dcfce7;
+    --danger-700:#7f1d1d;--danger-500:#dc2626;--danger-100:#fee2e2;
+    --warning-700:#78350f;--warning-500:#d97706;--warning-100:#fef3c7;
+    --ink-900:#1e2b3c;--ink-700:#334155;--ink-500:#64748b;--ink-400:#94a3b8;--ink-300:#cbd5e1;
+    --line:#e2e8f0;--line-soft:#eef2f7;--paper:#f4f7fc;--surface:#ffffff;
+    --radius-sm:10px;--radius:14px;--radius-lg:18px;
+    --shadow-sm:0 2px 8px rgba(16,24,40,0.07);
+    --shadow-md:0 4px 14px rgba(16,24,40,0.08);
+    --shadow-lg:0 10px 26px rgba(16,24,40,0.10);
+}
+*{box-sizing:border-box}
+html{font-size:18px}
+body{
+    background:var(--paper);
+    font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+    font-size:1rem;line-height:1.6;color:var(--ink-900);
+    margin:0;padding:0;min-height:100vh;
+    -webkit-font-smoothing:antialiased;
+}
+
+/* ============================================================
+   APP HEADER
+============================================================ */
+.app-header{
+    background:var(--surface);border-bottom:1px solid var(--line);
+    padding:0.85rem 1rem;display:flex;align-items:center;justify-content:space-between;
+    gap:12px;position:sticky;top:0;z-index:50;box-shadow:var(--shadow-sm);
+}
+.app-brand{display:flex;align-items:center;gap:10px;min-width:0}
+.app-brand .logo-wrap{
+    width:44px;height:44px;border-radius:10px;background:var(--brand-900);color:#fff;
+    display:flex;align-items:center;justify-content:center;font-weight:900;font-size:1rem;flex-shrink:0;overflow:hidden;
+}
+.app-brand .logo-wrap img{width:100%;height:100%;object-fit:contain;background:#fff;padding:4px}
+.app-brand .brand-text{display:flex;flex-direction:column;line-height:1.15;min-width:0}
+.app-brand .brand-name{font-weight:800;font-size:1rem;color:var(--ink-900)}
+.app-brand .brand-sub{font-size:0.7rem;color:var(--ink-500);font-weight:500;line-height:1.2}
+.header-actions{display:flex;gap:8px;flex-shrink:0;align-items:center}
+.icon-btn{
+    width:44px;height:44px;border-radius:10px;background:var(--paper);border:1px solid var(--line);
+    color:var(--ink-700);display:inline-flex;align-items:center;justify-content:center;
+    cursor:pointer;transition:all 0.15s;text-decoration:none;
+}
+.icon-btn:hover{background:var(--brand-50);border-color:var(--brand-500);color:var(--brand-700)}
+.icon-btn svg{width:20px;height:20px}
+
+/* ============================================================
+   MAIN LAYOUT
+============================================================ */
+.main{max-width:720px;margin:0 auto;padding:1.25rem 1rem 6rem}
+
+/* Alerts */
+.alert{
+    border-radius:var(--radius);padding:0.85rem 1rem;margin-bottom:0.9rem;font-weight:600;
+    display:flex;align-items:flex-start;gap:10px;font-size:0.9rem;line-height:1.5;
+}
+.alert.alert-success{background:var(--success-100);border:2px solid #86efac;color:var(--success-700)}
+.alert.alert-danger{background:var(--danger-100);border:2px solid #fca5a5;color:var(--danger-700)}
+.alert svg{width:20px;height:20px;flex-shrink:0;margin-top:1px}
+
+/* CTA Banner */
+.pay-cta{
+    background:linear-gradient(135deg, #007dfe 0%, #005fcc 100%);
+    color:#fff;border-radius:var(--radius-lg);padding:1.25rem 1.15rem;
+    margin-bottom:1rem;position:relative;overflow:hidden;
+    box-shadow:var(--shadow-lg);display:flex;flex-direction:column;gap:12px;
+}
+.pay-cta.pending{
+    background:linear-gradient(135deg,#78350f 0%,#b45309 100%);
+}
+.pay-cta::before{
+    content:'';position:absolute;top:-40px;right:-40px;width:180px;height:180px;
+    background:radial-gradient(circle,rgba(255,255,255,0.15) 0%,transparent 70%);
+    border-radius:50%;pointer-events:none;
+}
+.pay-cta h3{font-size:1.15rem;font-weight:800;margin:0 0 4px;display:flex;align-items:center;gap:8px;position:relative;z-index:2}
+.pay-cta p{font-size:0.85rem;margin:0;opacity:0.95;line-height:1.5;position:relative;z-index:2}
+
+.btn-pay-main{
+    background:#86efac;
+    color:#14532d;
+    border:none;
+    padding:0.85rem 1rem;border-radius:var(--radius);font-size:1rem;font-weight:800;
+    font-family:inherit;cursor:pointer;transition:all 0.18s;text-decoration:none;
+    display:inline-flex;align-items:center;justify-content:center;gap:10px;
+    width:100%;min-height:48px;box-shadow:0 4px 12px rgba(0,0,0,0.15);position:relative;z-index:2;
+}
+.btn-pay-main:hover{
+    transform:translateY(-2px);
+    background:#4ade80;
+    box-shadow:0 6px 16px rgba(0,0,0,0.2);
+}
+.btn-pay-disabled{
+    background:rgba(255,255,255,0.2);color:rgba(255,255,255,0.7);
+    pointer-events:none;box-shadow:none;
+}
+
+/* Stats Strip */
+.stats-strip{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    display:flex;flex-wrap:wrap;margin-bottom:1.5rem;box-shadow:var(--shadow-sm);
+}
+.stat-box{
+    flex:1;min-width:50%;padding:1rem;display:flex;flex-direction:column;gap:2px;
+    border-bottom:1px solid var(--line-soft);
+}
+.stat-box:nth-child(odd){border-right:1px solid var(--line-soft)}
+.stat-box:nth-child(3),.stat-box:nth-child(4){border-bottom:none}
+.stat-box .lbl{font-size:0.7rem;font-weight:800;color:var(--ink-500);text-transform:uppercase;letter-spacing:0.05em}
+.stat-box .val{font-size:1.1rem;font-weight:900;color:var(--ink-900);line-height:1.2}
+.stat-box .val small{font-size:0.8rem;font-weight:600;color:var(--ink-500)}
+
+/* Section */
+.section-title{font-size:0.85rem;text-transform:uppercase;letter-spacing:0.05em;
+    font-weight:800;color:var(--ink-500);margin:1.5rem 0 0.75rem;padding:0 4px;
+    display:flex;align-items:center;gap:8px}
+.section-title::before{content:'';display:inline-block;width:4px;height:14px;
+    background:var(--yellow-accent);border-radius:2px}
+
+/* Formal List Layout */
+.statement-list{
+    background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow-sm);overflow:hidden;
+}
+.statement-item{
+    padding:1rem;border-bottom:1px solid var(--line-soft);
+    display:flex;flex-direction:column;gap:6px;
+}
+.statement-item:last-child{border-bottom:none}
+.st-top{display:flex;justify-content:space-between;align-items:flex-start}
+.st-amt{font-size:1.15rem;font-weight:900;color:var(--ink-900)}
+.st-date{font-size:0.8rem;color:var(--ink-500);font-weight:600}
+.st-status{
+    display:inline-flex;align-items:center;gap:4px;padding:3px 8px;border-radius:6px;
+    font-size:0.7rem;font-weight:800;text-transform:uppercase;letter-spacing:0.02em;
+}
+.st-status.confirmed{background:var(--success-100);color:var(--success-700)}
+.st-status.pending{background:var(--warning-100);color:var(--warning-700)}
+.st-status.failed{background:var(--danger-100);color:var(--danger-700)}
+.st-meta{
+    display:flex;flex-wrap:wrap;gap:8px;font-size:0.8rem;color:var(--ink-500);font-weight:500;
+}
+.st-meta span{display:inline-flex;align-items:center;gap:4px}
+.st-ref{
+    font-family:'Courier New',monospace;background:var(--paper);padding:1px 5px;
+    border-radius:4px;font-weight:700;color:var(--ink-700);font-size:0.75rem;
+}
+
+/* Empty State */
+.empty-box{
+    text-align:center;padding:2.5rem 1rem;border:2px dashed var(--line);border-radius:var(--radius-lg);
+}
+.empty-box svg{width:40px;height:40px;color:var(--ink-300);margin-bottom:12px}
+.empty-box h3{font-size:1.05rem;font-weight:800;margin:0 0 4px}
+.empty-box p{font-size:0.9rem;color:var(--ink-500);margin:0}
+
+/* Pagination */
+.pagination{display:flex;justify-content:center;gap:6px;margin-top:1.5rem;flex-wrap:wrap}
+.page-link{
+    padding:8px 12px;background:var(--surface);border:1px solid var(--line);
+    border-radius:var(--radius-sm);color:var(--brand-700);font-weight:700;font-size:0.85rem;
+    text-decoration:none;transition:all 0.15s;display:inline-flex;align-items:center;justify-content:center;min-width:40px;
+}
+.page-link:hover:not(.disabled){background:var(--brand-50);border-color:var(--brand-500)}
+.page-link.active{background:var(--brand-900);color:#fff;border-color:var(--brand-900)}
+.page-link.disabled{color:var(--ink-300);pointer-events:none;background:var(--paper)}
+
+/* ============================================================
+   SIDEBAR DRAWER (Menu)
+============================================================ */
+.drawer-overlay {
+    position: fixed; inset: 0; background: rgba(15,41,66,0.5);
+    z-index: 1040; opacity: 0; visibility: hidden;
+    transition: all 0.3s ease; backdrop-filter: blur(2px);
+}
+.drawer-overlay.open { opacity: 1; visibility: visible; }
+
+.drawer {
+    position: fixed; top: 0; right: -300px; width: 280px; height: 100vh;
+    background: var(--surface); z-index: 1050;
+    box-shadow: -5px 0 25px rgba(0,0,0,0.15);
+    transition: right 0.3s ease; display: flex; flex-direction: column;
+}
+.drawer.open { right: 0; }
+
+.drawer-header {
+    padding: 1.25rem 1rem; border-bottom: 1px solid var(--line);
+    display: flex; align-items: center; justify-content: space-between;
+    background: var(--brand-50);
+}
+.drawer-header h3 { margin: 0; font-size: 1rem; font-weight: 800; color: var(--ink-900); }
+.drawer-close {
+    background: transparent; border: none; font-size: 1.25rem; color: var(--ink-500);
+    cursor: pointer; padding: 4px;
+}
+
+.drawer-body { padding: 1rem; flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 4px; }
+.drawer-item {
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+    text-decoration: none; color: var(--ink-700); font-weight: 600; font-size: 0.95rem;
+    border-radius: var(--radius-sm); transition: all 0.15s;
+}
+.drawer-item:hover { background: var(--brand-50); color: var(--brand-700); }
+.drawer-item svg { width: 20px; height: 20px; color: var(--brand-600); }
+.drawer-footer {
+    padding: 1rem; border-top: 1px solid var(--line);
+}
+.btn-logout {
+    display: flex; align-items: center; justify-content: center; gap: 8px;
+    width: 100%; padding: 12px; background: var(--danger-100); color: var(--danger-700);
+    border: none; border-radius: var(--radius-sm); font-weight: 800; font-size: 0.95rem;
+    cursor: pointer; font-family: inherit; text-decoration: none;
+}
+
+/* ============================================================
+   BOTTOM NAV (5 TABS)
+============================================================ */
+.bottom-nav{
+    position:fixed;bottom:0;left:0;right:0;background:var(--surface);
+    border-top:1px solid var(--line);display:flex;z-index:60;
+    box-shadow:0 -4px 14px rgba(16,24,40,0.06);
+}
+.bottom-nav .nav-item{
+    flex:1;display:flex;flex-direction:column;align-items:center;
+    justify-content:center;gap:3px;padding:10px 4px 12px;text-decoration:none;
+    color:var(--ink-500);font-size:0.68rem;font-weight:600;transition:all 0.2s;
+    min-height:64px;position:relative;
+}
+.bottom-nav .nav-item:hover{color:var(--brand-600);background:var(--brand-50)}
+.bottom-nav .nav-item.active{color:var(--brand-700);background:var(--brand-50)}
+.bottom-nav .nav-item.active::before{
+    content:'';position:absolute;top:0;left:12%;right:12%;height:3px;
+    background:var(--yellow-accent);border-radius:0 0 3px 3px;
+    animation:fadeIn 0.3s ease-in-out;
+}
+.bottom-nav .nav-item .icon{font-size:1.35rem;line-height:1;font-weight:900}
+.bottom-nav .nav-item span:last-child{margin-top:2px}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: scaleX(0.5); }
+    to { opacity: 1; transform: scaleX(1); }
+}
+
+/* Responsive Layout for Desktop */
+@media (min-width:700px){
+    .main{padding-bottom:2rem; max-width:640px;}
+    .bottom-nav{position:static;max-width:640px;margin:0 auto 2rem;border-radius:var(--radius);border:1px solid var(--line);box-shadow:var(--shadow-sm)}
+    .bottom-nav .nav-item{font-size:0.75rem}
+    .pay-cta{flex-direction:row;align-items:center;justify-content:space-between; padding:1.5rem;}
+    .pay-cta .btn-pay-main{width:auto;min-width:220px;}
+    .stats-strip{flex-wrap:nowrap;}
+    .stat-box{border-bottom:none !important;border-right:1px solid var(--line-soft);}
+    .stat-box:last-child{border-right:none;}
+    .statement-item{padding:1.25rem 1.5rem;}
+}
+@media (max-width:540px){
+    html{font-size:17px}
+    .main{padding:0.85rem 0.75rem 6rem}
+    .app-brand .brand-sub{display:none}
+    .bottom-nav .nav-item{font-size:0.65rem}
+    .bottom-nav .nav-item .icon{font-size:1.25rem}
+}
+</style>
 </head>
 <body>
-    <div id="wrapper">
-        <!-- Sidebar -->
-        <div id="sidebar-wrapper">
-            <div class="sidebar-heading">
-                <img src="../assets/images/harana-logo.png" alt="Harana" onerror="this.src=''; this.onerror=null; this.innerHTML='Harana';">
-                <span>Harana</span>
-                <button class="menu-toggle" id="menuToggle">
-                    <i class="fas fa-bars"></i>
-                </button>
-            </div>
-            <div class="list-group list-group-flush mt-2">
-                <a href="dashboard.php" class="list-group-item"><i class="fas fa-tachometer-alt"></i><span>Dashboard</span></a>
-                <a href="profile.php" class="list-group-item"><i class="fas fa-user"></i><span>My Profile</span></a>
-                <a href="payments.php" class="list-group-item active"><i class="fas fa-credit-card"></i><span>Smart Pay</span></a>
-                <a href="beneficiary.php" class="list-group-item"><i class="fas fa-heart"></i><span>Beneficiary</span></a>
-                <a href="notifications.php" class="list-group-item"><i class="fas fa-bell"></i><span>Notifications</span></a>
-                <a href="organization.php" class="list-group-item"><i class="fas fa-building"></i><span>Organization</span></a>
-                <a href="support.php" class="list-group-item"><i class="fas fa-life-ring"></i><span>Support</span></a>
-                <a href="../logout.php" class="list-group-item" onclick="return confirm('Are you sure?');"><i class="fas fa-sign-out-alt"></i><span>Logout</span></a>
-            </div>
+
+<!-- Drawer Overlay -->
+<div class="drawer-overlay" id="drawerOverlay"></div>
+
+<!-- Drawer Sidebar -->
+<div class="drawer" id="sideDrawer">
+    <div class="drawer-header">
+        <h3>Menu</h3>
+        <button class="drawer-close" id="closeDrawer">&times;</button>
+    </div>
+    <div class="drawer-body">
+        <a href="beneficiary.php" class="drawer-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+            Beneficiary
+        </a>
+        <a href="organization.php" class="drawer-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 21h18M3 7v14M21 7v14M6 7h12M6 3h12v4H6zM9 11h1M14 11h1M9 15h1M14 15h1"/></svg>
+            Organization
+        </a>
+        <?php if ($is_admin): ?>
+        <a href="../admin/dashboard.php" class="drawer-item">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M2 4l3 12h14l3-12-6 7-4-7-4 7-6-7z"/></svg>
+            Admin Panel
+        </a>
+        <?php endif; ?>
+    </div>
+    <div class="drawer-footer">
+        <a href="../logout.php" class="btn-logout" onclick="return confirm('Sign out of your account?');">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:18px;height:18px;"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
+            Sign Out
+        </a>
+    </div>
+</div>
+
+<!-- App Header -->
+<header class="app-header">
+    <div class="app-brand">
+        <div class="logo-wrap">
+            <img src="../assets/images/harana-logo.png" alt="NHGL" onerror="this.style.display='none';this.parentNode.textContent='NH';">
         </div>
+        <div class="brand-text">
+            <span class="brand-name">NHGL</span>
+            <span class="brand-sub">Nagkaisang Haranista</span>
+        </div>
+    </div>
+    <div class="header-actions">
+        <button class="icon-btn" id="openDrawer" aria-label="Menu">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></svg>
+        </button>
+    </div>
+</header>
 
-        <!-- Main Content -->
-        <div id="page-content-wrapper">
-            <?php 
-            $page_title = 'Smart Pay';
-            include '../includes/header.php'; 
-            ?>
-
-            <div class="payments-container">
-                <!-- Alert Messages -->
-                <?php if ($success_message == 'payment_submitted'): ?>
-                    <div class="alert alert-success alert-custom">
-                        <i class="fas fa-check-circle me-2"></i>
-                        <strong>Payment submitted!</strong> Your payment is pending confirmation. You will receive a notification once confirmed.
-                    </div>
-                <?php endif; ?>
-                
-                <?php if ($error_message == 'payment_failed'): ?>
-                    <div class="alert alert-danger alert-custom">
-                        <i class="fas fa-exclamation-circle me-2"></i>
-                        <strong>Payment failed!</strong> There was an error processing your payment. Please try again.
-                    </div>
-                <?php endif; ?>
-
-                <!-- GCash Pay Button -->
-                <div class="mb-4">
-                    <a href="gcash_payment.php" class="gcash-payment-btn" <?php echo $has_pending ? 'disabled' : ''; ?>>
-    <i class="fab fa-gcash"></i>
-    <?php if ($has_pending): ?>
-        <span>You have a pending payment</span>
-        <span class="pending-badge">Pending</span>
-    <?php else: ?>
-        <span>Pay with GCash</span>
-        <i class="fas fa-arrow-right"></i>
+<main class="main">
+    <?php if (!empty($success_text)): ?>
+        <div class="alert alert-success">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><polyline points="20 6 9 17 4 12"/></svg>
+            <span><?php echo htmlspecialchars($success_text); ?></span>
+        </div>
     <?php endif; ?>
-</a>
-                    <?php if ($has_pending): ?>
-                        <small class="text-muted d-block mt-2">
-                            <i class="fas fa-info-circle me-1"></i>
-                            Please wait for your pending payment to be confirmed before making another payment.
-                        </small>
-                    <?php else: ?>
-                        <small class="text-muted d-block mt-2">
-                            <i class="fas fa-info-circle me-1"></i>
-                            Pay your monthly contributions securely using GCash. 
-                            <a href="#" data-bs-toggle="modal" data-bs-target="#gcashGuideModal">How it works?</a>
-                        </small>
-                    <?php endif; ?>
-                </div>
 
-                <!-- Summary Cards -->
-                <div class="summary-grid">
-                    <div class="summary-card">
-                        <div class="summary-icon">
-                            <i class="fas fa-chart-line"></i>
-                        </div>
-                        <div class="summary-number">₱<?php echo number_format($payment_summary['total_amount'] ?? 0, 2); ?></div>
-                        <div class="summary-label">Total Contributions</div>
-                    </div>
-                    <div class="summary-card">
-                        <div class="summary-icon">
-                            <i class="fas fa-receipt"></i>
-                        </div>
-                        <div class="summary-number"><?php echo number_format($payment_summary['total_count'] ?? 0); ?></div>
-                        <div class="summary-label">Total Payments</div>
-                    </div>
-                    <div class="summary-card">
-                        <div class="summary-icon">
-                            <i class="fas fa-calendar-alt"></i>
-                        </div>
-                        <div class="summary-number"><?php echo $payment_summary['first_payment'] ? date('M Y', strtotime($payment_summary['first_payment'])) : 'N/A'; ?></div>
-                        <div class="summary-label">First Payment</div>
-                    </div>
-                    <div class="summary-card">
-                        <div class="summary-icon">
-                            <i class="fas fa-clock"></i>
-                        </div>
-                        <div class="summary-number"><?php echo $payment_summary['last_payment'] ? date('M d, Y', strtotime($payment_summary['last_payment'])) : 'N/A'; ?></div>
-                        <div class="summary-label">Last Payment</div>
-                    </div>
-                </div>
+    <?php if ($error_message == 'payment_failed'): ?>
+        <div class="alert alert-danger">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+            <span><strong>Payment failed.</strong> Please try again or contact support.</span>
+        </div>
+    <?php endif; ?>
 
-                <!-- Balance Overview -->
-                <div class="balance-card">
-                    <div class="balance-row">
-                        <div>
-                            <div class="balance-amount">₱<?php echo number_format(abs($current_balance), 2); ?></div>
-                            <div class="balance-status">
-                                <?php if ($current_balance > 0): ?>
-                                    <i class="fas fa-exclamation-triangle me-1"></i> Balance Due
-                                <?php elseif ($current_balance < 0): ?>
-                                    <i class="fas fa-check-circle me-1"></i> In Credit
-                                <?php else: ?>
-                                    <i class="fas fa-check-circle me-1"></i> Fully Paid
-                                <?php endif; ?>
-                            </div>
-                        </div>
-                        <div>
-                            <small>Paid: ₱<?php echo number_format($total_paid, 2); ?></small><br>
-                            <small>Expected: ₱<?php echo number_format($expected_total, 2); ?></small>
-                        </div>
-                    </div>
-                    <div class="balance-progress">
-                        <div class="progress-bar-custom">
-                            <div class="progress-fill" style="width: <?php echo $expected_total > 0 ? min(100, ($total_paid / $expected_total) * 100) : 0; ?>%"></div>
-                        </div>
-                    </div>
-                </div>
+    <!-- CTA Banner (GCash Blue) -->
+    <div class="pay-cta <?php echo $has_pending ? 'pending' : ''; ?>">
+        <div>
+            <?php if ($has_pending): ?>
+                <h3><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:20px;height:20px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg> Payment Under Review</h3>
+                <p>Your recent payment is pending admin verification. You may submit a new payment once it is confirmed.</p>
+            <?php else: ?>
+                <h3>Contribution</h3>
+                <p>Pay your monthly contribution securely using GCash.</p>
+            <?php endif; ?>
+        </div>
 
-                <!-- Payment Methods Breakdown -->
-                <?php if (!empty($payment_methods)): ?>
-                <div class="methods-grid">
-                    <?php 
-                    $total_method_amount = array_sum(array_column($payment_methods, 'total'));
-                    foreach ($payment_methods as $method): 
-                        $percentage = $total_method_amount > 0 ? ($method['total'] / $total_method_amount) * 100 : 0;
-                    ?>
-                    <div class="method-card">
-                        <div class="method-header">
-                            <span class="method-name"><?php echo ucfirst($method['payment_method']); ?></span>
-                            <span class="method-badge method-<?php echo $method['payment_method']; ?>">
-                                <i class="fas fa-<?php echo $method['payment_method'] == 'cash' ? 'money-bill' : ($method['payment_method'] == 'gcash' ? 'mobile-alt' : 'university'); ?> me-1"></i>
-                                <?php echo ucfirst($method['payment_method']); ?>
-                            </span>
-                        </div>
-                        <div class="method-amount">₱<?php echo number_format($method['total'], 2); ?></div>
-                        <div class="method-count"><?php echo $method['count']; ?> transaction(s)</div>
-                        <div class="method-progress">
-                            <div class="method-progress-fill" style="width: <?php echo $percentage; ?>%"></div>
-                        </div>
-                    </div>
-                    <?php endforeach; ?>
-                </div>
-                <?php endif; ?>
+        <?php if ($has_pending): ?>
+            <span class="btn-pay-main btn-pay-disabled">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:18px;height:18px;"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+                Pending Review
+            </span>
+        <?php else: ?>
+            <a href="gcash_payment.php" class="btn-pay-main">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="width:18px;height:18px;"><rect x="1" y="4" width="22" height="16" rx="2" ry="2"/><line x1="1" y1="10" x2="23" y2="10"/></svg>
+                Pay with GCash
+            </a>
+        <?php endif; ?>
+    </div>
 
-                <!-- Payment History Table -->
-                <div class="main-card">
-                    <div class="card-header-custom">
-                        <h5><i class="fas fa-list me-2"></i>Transaction History</h5>
-                    </div>
-                    <div class="table-responsive-custom">
-                        <?php if (empty($payments)): ?>
-                            <div class="empty-state">
-                                <div class="empty-icon">
-                                    <i class="fas fa-receipt"></i>
-                                </div>
-                                <h5>No Payment History</h5>
-                                <p class="text-muted">You haven't made any payments yet.</p>
-                                <a href="gcash_payment.php" class="btn btn-primary" style="background: #375a7f; border: none;">
-                                    <i class="fab fa-gcash me-2"></i>Pay with GCash
-                                </a>
-                            </div>
-                        <?php else: ?>
-                            <table class="table-custom">
-                                <thead>
-                                    <tr>
-                                        <th>Date</th>
-                                        <th>Receipt #</th>
-                                        <th>Amount</th>
-                                        <th>Method</th>
-                                        <th>Reference</th>
-                                        <th>Status</th>
-                                        <th>Actions</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    <?php foreach ($payments as $payment): ?>
-                                    <tr>
-                                        <td>
-                                            <strong><?php echo date('M d, Y', strtotime($payment['payment_date'])); ?></strong>
-                                            <br><small class="text-muted"><?php echo date('h:i A', strtotime($payment['created_at'] ?? $payment['payment_date'])); ?></small>
-                                        </td>
-                                        <td>
-                                            <span class="badge bg-secondary"><?php echo htmlspecialchars($payment['receipt_number'] ?? 'N/A'); ?></span>
-                                        </td>
-                                        <td class="fw-bold text-success">₱<?php echo number_format($payment['amount'], 2); ?></td>
-                                        <td>
-                                            <span class="method-badge method-<?php echo $payment['payment_method']; ?>">
-                                                <i class="fas fa-<?php echo $payment['payment_method'] == 'cash' ? 'money-bill' : ($payment['payment_method'] == 'gcash' ? 'mobile-alt' : 'university'); ?> me-1"></i>
-                                                <?php echo ucfirst($payment['payment_method']); ?>
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <?php if (!empty($payment['gcash_reference'])): ?>
-                                                <small><?php echo htmlspecialchars($payment['gcash_reference']); ?></small>
-                                            <?php else: ?>
-                                                <span class="text-muted">—</span>
-                                            <?php endif; ?>
-                                        </td>
-                                        <td>
-                                            <span class="badge-<?php echo $payment['payment_status']; ?>">
-                                                <i class="fas fa-<?php echo $payment['payment_status'] == 'confirmed' ? 'check-circle' : ($payment['payment_status'] == 'pending' ? 'clock' : 'times-circle'); ?> me-1"></i>
-                                                <?php echo ucfirst($payment['payment_status']); ?>
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <?php if ($payment['payment_status'] == 'confirmed' && !empty($payment['receipt_number'])): ?>
-                                            <a href="#" class="receipt-link" onclick="downloadReceipt('<?php echo $payment['receipt_number']; ?>')">
-                                                <i class="fas fa-download"></i> Receipt
-                                            </a>
-                                            <?php endif; ?>
-                                        </td>
-                                    </tr>
-                                    <?php endforeach; ?>
-                                </tbody>
-                            </table>
-                        <?php endif; ?>
-                    </div>
-
-                    <!-- Pagination -->
-                    <?php if ($total_pages > 1): ?>
-                    <div class="pagination-custom">
-                        <a href="?page=1" class="page-link-custom <?php echo $page <= 1 ? 'disabled' : ''; ?>">
-                            <i class="fas fa-angle-double-left"></i>
-                        </a>
-                        <a href="?page=<?php echo $page-1; ?>" class="page-link-custom <?php echo $page <= 1 ? 'disabled' : ''; ?>">
-                            <i class="fas fa-angle-left"></i>
-                        </a>
-                        
-                        <?php 
-                        $start = max(1, $page - 2);
-                        $end = min($total_pages, $page + 2);
-                        for ($i = $start; $i <= $end; $i++): 
-                        ?>
-                        <a href="?page=<?php echo $i; ?>" class="page-link-custom <?php echo $i == $page ? 'active' : ''; ?>">
-                            <?php echo $i; ?>
-                        </a>
-                        <?php endfor; ?>
-                        
-                        <a href="?page=<?php echo $page+1; ?>" class="page-link-custom <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
-                            <i class="fas fa-angle-right"></i>
-                        </a>
-                        <a href="?page=<?php echo $total_pages; ?>" class="page-link-custom <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">
-                            <i class="fas fa-angle-double-right"></i>
-                        </a>
-                    </div>
-                    <?php endif; ?>
-                    
-                    <?php if (!empty($payments)): ?>
-                    <div class="text-muted small p-3 border-top">
-                        Showing <?php echo count($payments); ?> of <?php echo $total_payments; ?> payments
-                    </div>
-                    <?php endif; ?>
-                </div>
+    <!-- Stats Strip -->
+    <div class="stats-strip">
+        <div class="stat-box">
+            <div class="lbl">Last Payment</div>
+            <div class="val"><?php echo !empty($payment_summary['last_payment']) ? date('M d, Y', strtotime($payment_summary['last_payment'])) : 'None'; ?></div>
+        </div>
+        <div class="stat-box">
+            <div class="lbl">Next Due</div>
+            <div class="val" style="color:<?php echo $has_pending ? 'var(--warning-700)' : ($is_overdue ? 'var(--danger-700)' : 'var(--ink-900)'); ?>;">
+                <?php echo date('M d, Y', strtotime($next_due_date)); ?>
             </div>
+        </div>
+        <div class="stat-box">
+            <div class="lbl">Monthly Due</div>
+            <div class="val">₱<?php echo number_format($monthly_contribution, 2); ?></div>
+        </div>
+        <div class="stat-box">
+            <div class="lbl">Months Active</div>
+            <div class="val"><?php echo $months_as_member; ?> <small>mos</small></div>
         </div>
     </div>
 
-    <!-- GCash Guide Modal -->
-    <div class="modal fade" id="gcashGuideModal" tabindex="-1" aria-labelledby="gcashGuideModalLabel" aria-hidden="true">
-        <div class="modal-dialog modal-lg">
-            <div class="modal-content">
-                <div class="modal-header" style="background: linear-gradient(135deg, #00b4d8, #0077b6); color: white;">
-                    <h5 class="modal-title" id="gcashGuideModalLabel">
-                        <i class="fab fa-gcash me-2"></i>How to Pay with GCash
-                    </h5>
-                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                </div>
-                <div class="modal-body">
-                    <div class="row">
-                        <div class="col-md-6">
-                            <h6 class="fw-bold">Step-by-Step Guide</h6>
-                            <ol class="list-group list-group-numbered mb-3">
-                                <li class="list-group-item border-0 ps-0">
-                                    <strong>Step 1:</strong> Click the <span class="badge" style="background: #00b4d8;">Pay with GCash</span> button
-                                </li>
-                                <li class="list-group-item border-0 ps-0">
-                                    <strong>Step 2:</strong> Enter the amount you want to pay
-                                </li>
-                                <li class="list-group-item border-0 ps-0">
-                                    <strong>Step 3:</strong> Scan the QR code using your GCash app
-                                </li>
-                                <li class="list-group-item border-0 ps-0">
-                                    <strong>Step 4:</strong> Confirm the payment in your GCash app
-                                </li>
-                                <li class="list-group-item border-0 ps-0">
-                                    <strong>Step 5:</strong> Wait for admin confirmation (within 24 hours)
-                                </li>
-                            </ol>
-                            
-                            <div class="alert alert-info">
-                                <i class="fas fa-info-circle me-2"></i>
-                                <strong>Note:</strong> Please ensure you have enough balance in your GCash account before proceeding.
-                            </div>
-                        </div>
-                        <div class="col-md-6 text-center">
-                            <h6 class="fw-bold">Scan QR Code to Pay</h6>
-                            <div class="bg-white p-3 rounded shadow-sm" style="display: inline-block;">
-                                <img src="../assets/images/gcash-qr.jpg" alt="GCash QR Code" 
-                                     style="max-width: 250px; width: 100%;" 
-                                     onerror="this.style.display='none'; this.parentNode.innerHTML='<div class=\'text-center py-4\'><i class=\'fas fa-qrcode fa-5x text-secondary\'></i><p class=\'mt-2 text-muted\'>QR Code Image Not Found</p></div>'">
-                            </div>
-                            <p class="text-muted mt-2">
-                                <i class="fas fa-mobile-alt me-1"></i>
-                                Open GCash app → Pay QR → Scan this code
-                            </p>
-                        </div>
+    <!-- Payment History -->
+    <div class="section-title">Payment Statement</div>
+
+    <?php if (empty($payments)): ?>
+        <div class="empty-box">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+            <h3>No payment history yet</h3>
+            <p>You have not made any payments so far.</p>
+        </div>
+    <?php else: ?>
+        <div class="statement-list">
+            <?php foreach ($payments as $payment): 
+                $display_period = !empty($payment['period_month']) ? $payment['period_month'] : date('Y-m', strtotime($payment['payment_date']));
+            ?>
+            <div class="statement-item">
+                <div class="st-top">
+                    <div>
+                        <div class="st-amt">₱<?php echo number_format($payment['amount'], 2); ?></div>
+                        <div class="st-date"><?php echo date('M d, Y · h:i A', strtotime($payment['payment_date'])); ?></div>
                     </div>
+                    <span class="st-status <?php echo $payment['payment_status']; ?>">
+                        <?php echo ucfirst($payment['payment_status']); ?>
+                    </span>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                    <a href="gcash_payment.php" class="btn" style="background: linear-gradient(135deg, #00b4d8, #0077b6); color: white;">
-                        <i class="fab fa-gcash me-2"></i>Pay Now
-                    </a>
+
+                <div class="st-meta">
+                    <span><?php echo ucfirst($payment['payment_method']); ?></span>
+                    <span>· Period: <?php echo date('M Y', strtotime($display_period . '-01')); ?></span>
+                    <?php if (!empty($payment['receipt_number'])): ?>
+                        <span>· Receipt: <span class="st-ref"><?php echo htmlspecialchars($payment['receipt_number']); ?></span></span>
+                    <?php endif; ?>
+                    <?php if (!empty($payment['gcash_reference'])): ?>
+                        <span>· Ref: <span class="st-ref"><?php echo htmlspecialchars($payment['gcash_reference']); ?></span></span>
+                    <?php endif; ?>
                 </div>
             </div>
+            <?php endforeach; ?>
         </div>
-    </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        // Sidebar Toggle
-        const menuToggle = document.getElementById('menuToggle');
-        const sidebar = document.getElementById('sidebar-wrapper');
-        const headerLogo = document.getElementById('headerLogo');
-        
-        const sidebarCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
-        
-        if (sidebarCollapsed) {
-            sidebar.classList.add('collapsed');
-        }
-        
-        if (menuToggle) {
-            menuToggle.addEventListener('click', function() {
-                sidebar.classList.toggle('collapsed');
-                localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed'));
-            });
-        }
+        <!-- Pagination -->
+        <?php if ($total_pages > 1): ?>
+        <div class="pagination">
+            <a href="?page=1" class="page-link <?php echo $page <= 1 ? 'disabled' : ''; ?>">&laquo;</a>
+            <a href="?page=<?php echo max(1, $page - 1); ?>" class="page-link <?php echo $page <= 1 ? 'disabled' : ''; ?>">&lsaquo;</a>
+            <?php
+            $start = max(1, $page - 2);
+            $end = min($total_pages, $page + 2);
+            for ($i = $start; $i <= $end; $i++):
+            ?>
+                <a href="?page=<?php echo $i; ?>" class="page-link <?php echo $i == $page ? 'active' : ''; ?>"><?php echo $i; ?></a>
+            <?php endfor; ?>
+            <a href="?page=<?php echo min($total_pages, $page + 1); ?>" class="page-link <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">&rsaquo;</a>
+            <a href="?page=<?php echo $total_pages; ?>" class="page-link <?php echo $page >= $total_pages ? 'disabled' : ''; ?>">&raquo;</a>
+        </div>
+        <?php endif; ?>
+    <?php endif; ?>
+</main>
 
-        // Handle logo fallback
-        const sidebarLogo = document.querySelector('.sidebar-heading img');
-        if (sidebarLogo) {
-            sidebarLogo.onerror = function() {
-                this.style.display = 'none';
-                this.nextSibling.textContent = 'Harana';
-            };
-        }
-        
-        if (headerLogo) {
-            headerLogo.onerror = function() {
-                this.style.display = 'none';
-            };
-        }
+<!-- Bottom Nav (5 Tabs) -->
+<nav class="bottom-nav">
+    <a href="dashboard.php" class="nav-item">
+        <span class="icon">🏠</span>
+        <span>Home</span>
+    </a>
+    <a href="notifications.php" class="nav-item">
+        <span class="icon">🔔</span>
+        <span>Notify</span>
+    </a>
+    <a href="payments.php" class="nav-item active">
+        <span class="icon">💳</span>
+        <span>Payments</span>
+    </a>
+    <a href="profile.php" class="nav-item">
+        <span class="icon">👤</span>
+        <span>Profile</span>
+    </a>
+    <a href="support.php" class="nav-item">
+        <span class="icon">❓</span>
+        <span>Help</span>
+    </a>
+</nav>
 
-        // Download receipt function
-        function downloadReceipt(receiptNumber) {
-            alert('Downloading receipt: ' + receiptNumber + '\n\nThis feature will be available soon.');
-        }
-    </script>
+<script>
+// Drawer Logic
+(function(){
+    const openBtn = document.getElementById('openDrawer');
+    const closeBtn = document.getElementById('closeDrawer');
+    const drawer = document.getElementById('sideDrawer');
+    const overlay = document.getElementById('drawerOverlay');
+
+    function openDrawer() {
+        drawer.classList.add('open');
+        overlay.classList.add('open');
+    }
+
+    function closeDrawer() {
+        drawer.classList.remove('open');
+        overlay.classList.remove('open');
+    }
+
+    openBtn.addEventListener('click', openDrawer);
+    closeBtn.addEventListener('click', closeDrawer);
+    overlay.addEventListener('click', closeDrawer);
+})();
+</script>
+
 </body>
 </html>

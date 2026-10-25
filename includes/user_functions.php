@@ -1,9 +1,11 @@
 <?php
 /**
+ * includes/user_functions.php
+ * Refactored for strict data integrity. All payment queries strictly use `member_code`.
+ */
+
+/**
  * Get user profile photo URL
- * @param object $db Database instance
- * @param int $user_id User ID
- * @return string|null Profile photo URL or null
  */
 function getUserProfilePhoto($db, $user_id) {
     if (empty($user_id)) return null;
@@ -28,13 +30,6 @@ function getUserProfilePhoto($db, $user_id) {
 function getUserMemberData($db, $current_user) {
     $member = null;
     
-    // Debug logging
-    error_log("=== getUserMemberData Debug ===");
-    error_log("Current user ID: " . ($current_user['user_id'] ?? 'NOT SET'));
-    error_log("Current username: " . ($current_user['username'] ?? 'NOT SET'));
-    error_log("Current email: " . ($current_user['email'] ?? 'NOT SET'));
-    error_log("Current role: " . ($current_user['role'] ?? 'NOT SET'));
-    
     // Try to find member by user_id (most reliable)
     if (!empty($current_user['user_id'])) {
         $member = $db->getSingle(
@@ -42,9 +37,6 @@ function getUserMemberData($db, $current_user) {
             [$current_user['user_id']],
             'i'
         );
-        if ($member) {
-            error_log("Found member by user_id: " . ($member['member_code'] ?? 'unknown') . " (member_code: " . ($member['member_code'] ?? 'N/A') . ")");
-        }
     }
     
     // If not found, try by username
@@ -54,9 +46,6 @@ function getUserMemberData($db, $current_user) {
             [$current_user['username']],
             's'
         );
-        if ($member) {
-            error_log("Found member by username: " . ($member['member_code'] ?? 'unknown'));
-        }
     }
     
     // Try by email if available
@@ -66,25 +55,17 @@ function getUserMemberData($db, $current_user) {
             [$current_user['email']],
             's'
         );
-        if ($member) {
-            error_log("Found member by email: " . ($member['member_code'] ?? 'unknown'));
-        }
     }
     
     // For admin users, don't force member data
     if (!$member && $current_user['role'] === 'admin') {
-        error_log("Admin user, returning null (no member data needed)");
         return null;
     }
     
-    // If still not found, return null instead of fallback (to avoid wrong data)
+    // If still not found, return null instead of fallback
     if (!$member) {
-        error_log("No member found for user!");
         return null;
     }
-    
-    error_log("Final member data - member_code: " . $member['member_code']);
-    error_log("===============================");
     
     return $member;
 }
@@ -121,7 +102,6 @@ function getSampleMemberData() {
  */
 function getUserBalance($db, $member_code) {
     if (empty($member_code)) {
-        error_log("getUserBalance called with empty member_code");
         return null;
     }
     
@@ -149,13 +129,12 @@ function getUserBalance($db, $member_code) {
  */
 function getUserRecentPayments($db, $member_code, $limit = 5) {
     if (empty($member_code)) {
-        error_log("getUserRecentPayments called with empty member_code");
         return [];
     }
     
     return $db->getAll(
         "SELECT p.* FROM payments p
-         WHERE p.member_id = ? AND p.payment_status = 'confirmed' 
+         WHERE p.member_code = ? AND p.payment_status = 'confirmed' 
          ORDER BY p.payment_date DESC 
          LIMIT ?",
         [$member_code, $limit],
@@ -168,14 +147,13 @@ function getUserRecentPayments($db, $member_code, $limit = 5) {
  */
 function getUserPayments($db, $member_code, $limit, $offset) {
     if (empty($member_code)) {
-        error_log("getUserPayments called with empty member_code");
         return [];
     }
     
     return $db->getAll(
         "SELECT p.* FROM payments p
-         WHERE p.member_id = ? 
-         ORDER BY p.payment_date DESC 
+         WHERE p.member_code = ? 
+         ORDER BY p.payment_date DESC, p.payment_id DESC 
          LIMIT ? OFFSET ?",
         [$member_code, $limit, $offset],
         'sii'
@@ -187,13 +165,12 @@ function getUserPayments($db, $member_code, $limit, $offset) {
  */
 function getUserPaymentCount($db, $member_code) {
     if (empty($member_code)) {
-        error_log("getUserPaymentCount called with empty member_code");
         return 0;
     }
     
     $result = $db->getSingle(
         "SELECT COUNT(*) as total FROM payments p
-         WHERE p.member_id = ?",
+         WHERE p.member_code = ?",
         [$member_code],
         's'
     );
@@ -214,7 +191,6 @@ function calculateMonthsAsMember($member) {
         $diff = $join_date->diff($today);
         return ($diff->y * 12) + $diff->m;
     } catch (Exception $e) {
-        error_log("Error calculating months: " . $e->getMessage());
         return 0;
     }
 }
@@ -334,7 +310,6 @@ function updateUserProfile($db, $member_code, $data) {
  * Request beneficiary update
  */
 function requestBeneficiaryUpdate($db, $member_code, $data) {
-    // In a real system, this would create a pending request
     return ['success' => true, 'message' => 'Beneficiary update request submitted for approval'];
 }
 
@@ -346,7 +321,6 @@ function requestBeneficiaryUpdate($db, $member_code, $data) {
  * Create notification for a user
  */
 function createNotification($db, $user_id, $title, $message, $type = 'system', $link = null, $icon = null, $is_deletable = true) {
-    // Set icon based on type if not provided
     if (!$icon) {
         $icons = [
             'payment' => 'credit-card',
@@ -360,7 +334,6 @@ function createNotification($db, $user_id, $title, $message, $type = 'system', $
         $icon = $icons[$type] ?? 'bell';
     }
     
-    // Set icon color based on type
     $icon_colors = [
         'payment' => 'success',
         'beneficiary' => 'danger',
@@ -384,7 +357,6 @@ function createNotification($db, $user_id, $title, $message, $type = 'system', $
  * Create notification for all users (announcements)
  */
 function createNotificationForAll($db, $title, $message, $type = 'announcement', $link = null, $icon = null) {
-    // Get all active users
     $users = $db->getAll("SELECT user_id FROM users WHERE is_active = 1");
     $count = 0;
     
@@ -401,7 +373,6 @@ function createNotificationForAll($db, $title, $message, $type = 'announcement',
  * Create notification for member (by member_code)
  */
 function createNotificationForMember($db, $member_code, $title, $message, $type = 'system', $link = null, $icon = null) {
-    // Get user_id from member_code
     $member = $db->getSingle(
         "SELECT user_id FROM members WHERE member_code = ? AND user_id IS NOT NULL",
         [$member_code], 's'
@@ -429,7 +400,6 @@ function getUnreadNotificationCount($db, $user_id) {
  * Delete reminders after payment is made
  */
 function deletePaidReminders($db, $user_id) {
-    // This will be called when payment is made to delete related reminders
     $db->execute(
         "DELETE FROM notifications 
          WHERE type = 'reminder' 
@@ -441,10 +411,8 @@ function deletePaidReminders($db, $user_id) {
 
 /**
  * Send payment due reminders
- * This should be called by a cron job daily
  */
 function sendPaymentReminders($db) {
-    // Get members with overdue payments
     $overdue_members = $db->getAll("
         SELECT m.member_code, m.user_id, m.first_name, m.last_name, 
                m.monthly_contribution, b.last_payment_date,
@@ -477,5 +445,36 @@ function sendPaymentReminders($db) {
     }
     
     return $count;
+}
+
+/**
+ * Get an app setting value
+ */
+function getAppSetting($db, $key, $default = null) {
+    try {
+        $row = $db->getSingle(
+            "SELECT setting_value FROM app_settings WHERE setting_key = ?",
+            [$key], 's'
+        );
+        return $row['setting_value'] ?? $default;
+    } catch (Throwable $e) {
+        return $default;
+    }
+}
+
+/**
+ * Set an app setting value
+ */
+function setAppSetting($db, $key, $value) {
+    try {
+        return $db->execute(
+            "INSERT INTO app_settings (setting_key, setting_value)
+             VALUES (?, ?)
+             ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)",
+            [$key, $value], 'ss'
+        );
+    } catch (Throwable $e) {
+        return false;
+    }
 }
 ?>
